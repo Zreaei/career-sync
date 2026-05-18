@@ -13,14 +13,13 @@ import {
 import {
   createAdminUser,
   createProdi,
-  getAdminUsers,
-  getProdi,
   softDeleteAdminUser,
   updateAdminUser,
   updateProdi,
   type AdminUserWithProdi,
   type Prodi,
 } from "@/lib/supabase/superadmin-queries";
+import { useSuperadminData } from "../SuperadminDataProvider";
 
 const INTEGRATION_STATUSES = [
   { value: "planned", label: "Belum Terintegrasi", className: "bg-surface-container text-on-surface-variant" },
@@ -166,9 +165,7 @@ interface AdminForm {
 const emptyForm: AdminForm = { name: "", email: "", password: "", prodi_id: "", prodiName: "" };
 
 export default function ManageAdminsPage() {
-  const [adminList, setAdminList] = useState<AdminUserWithProdi[]>([]);
-  const [prodiList, setProdiList] = useState<Prodi[]>([]);
-  const [loading, setLoading] = useState(true);
+  const { admins: adminList, prodis: prodiList, loading } = useSuperadminData();
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -178,16 +175,6 @@ export default function ManageAdminsPage() {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [form, setForm] = useState<AdminForm>(emptyForm);
   const [deleteTarget, setDeleteTarget] = useState<AdminUserWithProdi | null>(null);
-
-  useEffect(() => {
-    let cancelled = false;
-    Promise.all([getAdminUsers(), getProdi()])
-      .then(([admins, prodis]) => {
-        if (!cancelled) { setAdminList(admins); setProdiList(prodis); setLoading(false); }
-      })
-      .catch((e) => { if (!cancelled) { setError((e as Error).message); setLoading(false); } });
-    return () => { cancelled = true; };
-  }, []);
 
   const prodiTanpaAdmin = useMemo(
     () => prodiList.filter((p) => !adminList.some((a) => a.prodi_id === p.id)),
@@ -228,37 +215,16 @@ export default function ManageAdminsPage() {
   };
 
   const handleChangeIntegration = async (prodiId: string, status: IntegrationStatus) => {
-    const prev = prodiList.find((p) => p.id === prodiId)?.integration_status ?? null;
-    // Optimistic update.
-    setProdiList((list) => list.map((p) => (p.id === prodiId ? { ...p, integration_status: status } : p)));
-    setAdminList((list) =>
-      list.map((a) =>
-        a.prodi_id === prodiId && a.prodi
-          ? { ...a, prodi: { ...a.prodi, integration_status: status } }
-          : a,
-      ),
-    );
     try {
       await updateProdi(prodiId, { integration_status: status });
     } catch (e) {
-      // Roll back on failure.
-      setProdiList((list) => list.map((p) => (p.id === prodiId ? { ...p, integration_status: prev } : p)));
-      setAdminList((list) =>
-        list.map((a) =>
-          a.prodi_id === prodiId && a.prodi
-            ? { ...a, prodi: { ...a.prodi, integration_status: prev } }
-            : a,
-        ),
-      );
       setError(`Gagal mengubah status integrasi: ${(e as Error).message}`);
     }
   };
 
   const handleCreateProdi = async (name: string): Promise<Prodi | null> => {
     try {
-      const prodi = await createProdi({ name, fakultas: null, integration_status: "planned" });
-      setProdiList((list) => [...list, prodi]);
-      return prodi;
+      return await createProdi({ name, fakultas: null, integration_status: "planned" });
     } catch (e) {
       setError(`Gagal menambah prodi: ${(e as Error).message}`);
       return null;
@@ -282,16 +248,14 @@ export default function ManageAdminsPage() {
     setError(null);
     try {
       if (editingId) {
-        const updated = await updateAdminUser(editingId, { name: form.name, prodi_id: form.prodi_id });
-        setAdminList((list) => list.map((a) => (a.id === editingId ? updated : a)));
+        await updateAdminUser(editingId, { name: form.name, prodi_id: form.prodi_id });
       } else {
-        const created = await createAdminUser({
+        await createAdminUser({
           name: form.name,
           email: form.email,
           password: form.password,
           prodi_id: form.prodi_id,
         });
-        setAdminList((list) => [...list, created]);
       }
       closeModal();
     } catch (e) {
@@ -306,7 +270,6 @@ export default function ManageAdminsPage() {
     setSaving(true);
     try {
       await softDeleteAdminUser(deleteTarget.id);
-      setAdminList((list) => list.filter((a) => a.id !== deleteTarget.id));
       setDeleteTarget(null);
     } catch (e) {
       setError((e as Error).message);

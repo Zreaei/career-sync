@@ -4,9 +4,9 @@ import React, { useEffect, useState } from "react";
 import Link from "next/link";
 import Icon from "@/components/ui/Icon";
 import StatCard from "@/components/ui/StatCard";
-import { getAdminUsers, getProdi, type AdminUserWithProdi, type Prodi } from "@/lib/supabase/superadmin-queries";
 import { getCurrentUser, getDisplayName, getInitials } from "@/lib/supabase/auth";
 import type { User } from "@supabase/supabase-js";
+import { useSuperadminData } from "../SuperadminDataProvider";
 
 const statusStyles: Record<string, { bg: string; text: string; dot: string; label: string }> = {
   active: { bg: "bg-green-50", text: "text-green-700", dot: "bg-green-500", label: "Aktif" },
@@ -15,23 +15,12 @@ const statusStyles: Record<string, { bg: string; text: string; dot: string; labe
 };
 
 export default function SuperadminDashboard() {
+  const { admins, prodis, loading } = useSuperadminData();
   const [user, setUser] = useState<User | null>(null);
-  const [admins, setAdmins] = useState<AdminUserWithProdi[]>([]);
-  const [prodis, setProdis] = useState<Prodi[]>([]);
-  const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     let cancelled = false;
-    Promise.all([getCurrentUser(), getAdminUsers(), getProdi()])
-      .then(([u, adminList, prodiList]) => {
-        if (!cancelled) {
-          setUser(u);
-          setAdmins(adminList);
-          setProdis(prodiList);
-          setLoading(false);
-        }
-      })
-      .catch(() => { if (!cancelled) setLoading(false); });
+    getCurrentUser().then((u) => { if (!cancelled) setUser(u); });
     return () => { cancelled = true; };
   }, []);
 
