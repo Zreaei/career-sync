@@ -8,16 +8,10 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import {
-  getAllCLOs,
-  getMatkul,
-  getStudents,
-  getStudentCLOsByMatkul,
-  type Matkul,
-} from "@/lib/supabase/admin-queries";
-import { useAdminProdi } from "@/lib/supabase/useAdminProdi";
+import { type Matkul } from "@/lib/supabase/admin-queries";
+import { useAdminData } from "../AdminDataProvider";
 import Link from "next/link";
-import { useEffect, useState } from "react";
+import { useMemo, useState } from "react";
 
 const semesterOptions = ["1", "2", "3", "4", "5", "6", "7", "8"];
 
@@ -32,60 +26,30 @@ interface MKCoverage {
 }
 
 export default function AdminGradesPage() {
-  const { data: adminCtx, loading: ctxLoading, error: ctxError } = useAdminProdi();
+  const { adminCtx, matkul: matkuls, clos, studentClos, students, loading, error } = useAdminData();
   const [search, setSearch] = useState("");
   const [semesterFilter, setSemesterFilter] = useState("all");
   const [coverageFilter, setCoverageFilter] = useState("all");
-  const [coverages, setCoverages] = useState<MKCoverage[]>([]);
-  const [studentsCount, setStudentsCount] = useState(0);
-  const [dataLoading, setDataLoading] = useState(true);
-  const [dataError, setDataError] = useState<string | null>(null);
 
-  const loading = ctxLoading || dataLoading;
-  const error = dataError ?? ctxError;
+  const studentsCount = students.length;
 
-  useEffect(() => {
-    if (!adminCtx) return;
-    let cancelled = false;
-    Promise.all([
-      getMatkul(adminCtx.prodi_id),
-      getAllCLOs(),
-      getStudents(adminCtx.prodi_id),
-    ])
-      .then(async ([matkuls, allClos, students]) => {
-        if (cancelled) return;
-        const totalStudents = students.length;
-
-        const results: MKCoverage[] = await Promise.all(
-          matkuls.map(async (mk) => {
-            const mkCloIds = allClos
-              .filter((c) => c.matkul_id === mk.id)
-              .map((c) => c.id);
-            const cloCount = mkCloIds.length;
-            if (cloCount === 0) {
-              return { mk, cloCount: 0, graded: 0, progress: 0, key: "no-clo" as CoverageKey };
-            }
-            const studentClos = await getStudentCLOsByMatkul(mk.id);
-            const graded = new Set(studentClos.map((sc) => sc.student_id)).size;
-            const progress = totalStudents > 0 ? Math.round((graded / totalStudents) * 100) : 0;
-            let key: CoverageKey = "belum";
-            if (progress === 100) key = "lengkap";
-            else if (progress > 0) key = "sebagian";
-            return { mk, cloCount, graded, progress, key };
-          }),
-        );
-
-        if (!cancelled) {
-          setCoverages(results);
-          setStudentsCount(totalStudents);
-          setDataLoading(false);
-        }
-      })
-      .catch((e) => {
-        if (!cancelled) { setDataError((e as Error).message); setDataLoading(false); }
-      });
-    return () => { cancelled = true; };
-  }, [adminCtx]);
+  const coverages = useMemo<MKCoverage[]>(() => {
+    return matkuls.map((mk) => {
+      const mkCloIds = new Set(clos.filter((c) => c.matkul_id === mk.id).map((c) => c.id));
+      const cloCount = mkCloIds.size;
+      if (cloCount === 0) {
+        return { mk, cloCount: 0, graded: 0, progress: 0, key: "no-clo" as CoverageKey };
+      }
+      const graded = new Set(
+        studentClos.filter((sc) => mkCloIds.has(sc.clo_id)).map((sc) => sc.student_id),
+      ).size;
+      const progress = studentsCount > 0 ? Math.round((graded / studentsCount) * 100) : 0;
+      let key: CoverageKey = "belum";
+      if (progress === 100) key = "lengkap";
+      else if (progress > 0) key = "sebagian";
+      return { mk, cloCount, graded, progress, key };
+    });
+  }, [matkuls, clos, studentClos, studentsCount]);
 
   const filteredCoverages = coverages.filter(({ mk, key }) => {
     const matchSearch =

@@ -1,4 +1,6 @@
 import { supabase } from "./client";
+import { ensureAdminDataInitialized } from "./adminDataStore";
+import { ensureSuperadminDataInitialized } from "./superadminDataStore";
 
 export type UserRole = "student" | "admin" | "hr" | "superadmin";
 
@@ -82,6 +84,12 @@ export async function signInAndResolveRole(
     throw new Error(
       `Akun ini terdaftar sebagai ${roleLabel[role]}, bukan ${roleLabel[expectedRole]}.`,
     );
+  }
+  // Prefetch role-scoped data so dashboard renders without a loading state.
+  if (role === "admin") {
+    ensureAdminDataInitialized().catch(() => {});
+  } else if (role === "superadmin") {
+    ensureSuperadminDataInitialized().catch(() => {});
   }
   return { role, redirectTo: roleDashboard[role] };
 }

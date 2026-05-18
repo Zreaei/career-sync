@@ -12,12 +12,11 @@ import {
 import {
   createStudent,
   deleteStudent,
-  getStudents,
   updateStudent,
   type Student,
 } from "@/lib/supabase/admin-queries";
-import { useAdminProdi } from "@/lib/supabase/useAdminProdi";
-import React, { useEffect, useState } from "react";
+import { useAdminData } from "../AdminDataProvider";
+import React, { useState } from "react";
 
 const angkatanOptions = Array.from({ length: 10 }, (_, i) =>
   String(new Date().getFullYear() - i),
@@ -42,12 +41,15 @@ const emptyForm: UserForm = {
 };
 
 export default function UsersPage() {
-  const { data: adminCtx, loading: ctxLoading, error: ctxError } = useAdminProdi();
+  const {
+    adminCtx,
+    students: userList,
+    loading,
+    error: dataError,
+    setStudents: setUserList,
+  } = useAdminData();
   const [search, setSearch] = useState("");
   const [angkatanFilter, setAngkatanFilter] = useState("all");
-  const [userList, setUserList] = useState<Student[]>([]);
-  const [studentsLoading, setStudentsLoading] = useState(true);
-  const [studentsError, setStudentsError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
   const setError = setFormError;
@@ -56,17 +58,7 @@ export default function UsersPage() {
   const [form, setForm] = useState<UserForm>(emptyForm);
   const [deleteTarget, setDeleteTarget] = useState<Student | null>(null);
 
-  const loading = ctxLoading || studentsLoading;
-  const error = formError ?? studentsError ?? ctxError;
-
-  useEffect(() => {
-    if (!adminCtx) return;
-    let cancelled = false;
-    getStudents(adminCtx.prodi_id)
-      .then((data) => { if (!cancelled) { setUserList(data); setStudentsLoading(false); } })
-      .catch((e) => { if (!cancelled) { setStudentsError((e as Error).message); setStudentsLoading(false); } });
-    return () => { cancelled = true; };
-  }, [adminCtx]);
+  const error = formError ?? dataError;
 
   const filtered = userList.filter((u) => {
     const matchSearch =
@@ -144,7 +136,9 @@ export default function UsersPage() {
           status: form.status,
           prodi_id: adminCtx.prodi_id,
         });
-        setUserList((list) => [...list, created]);
+        // Idempotent: realtime INSERT may have already appended this row by
+        // the time the edge function returns. Skip if id is already present.
+        setUserList((list) => (list.some((u) => u.id === created.id) ? list : [...list, created]));
       }
       closeModal();
     } catch (e) {

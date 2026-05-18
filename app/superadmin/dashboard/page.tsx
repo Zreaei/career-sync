@@ -1,11 +1,10 @@
 "use client";
 
-import React, { useEffect, useState } from "react";
+import React from "react";
 import Link from "next/link";
 import Icon from "@/components/ui/Icon";
 import StatCard from "@/components/ui/StatCard";
-import { getCurrentUser, getDisplayName, getInitials } from "@/lib/supabase/auth";
-import type { User } from "@supabase/supabase-js";
+import { getDisplayName, getInitials } from "@/lib/supabase/auth";
 import { useSuperadminData } from "../SuperadminDataProvider";
 
 const statusStyles: Record<string, { bg: string; text: string; dot: string; label: string }> = {
@@ -15,14 +14,7 @@ const statusStyles: Record<string, { bg: string; text: string; dot: string; labe
 };
 
 export default function SuperadminDashboard() {
-  const { admins, prodis, loading } = useSuperadminData();
-  const [user, setUser] = useState<User | null>(null);
-
-  useEffect(() => {
-    let cancelled = false;
-    getCurrentUser().then((u) => { if (!cancelled) setUser(u); });
-    return () => { cancelled = true; };
-  }, []);
+  const { admins, prodis, currentUser: user, loading } = useSuperadminData();
 
   const displayName = getDisplayName(user);
   const initials = getInitials(displayName);

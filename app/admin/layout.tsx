@@ -6,6 +6,7 @@ import Sidebar from "@/components/layout/Sidebar";
 import { SidebarProvider } from "@/components/layout/SidebarContext";
 import TopBar from "@/components/layout/TopBar";
 import React from "react";
+import { AdminDataProvider } from "./AdminDataProvider";
 
 const adminNav: NavItem[] = [
   { label: "Dashboard", icon: "dashboard", href: "/admin/dashboard" },
@@ -38,9 +39,11 @@ export default function AdminLayout({
 }) {
   return (
     <AuthGate role="admin">
-      <SidebarProvider>
-        <AdminLayoutInner>{children}</AdminLayoutInner>
-      </SidebarProvider>
+      <AdminDataProvider>
+        <SidebarProvider>
+          <AdminLayoutInner>{children}</AdminLayoutInner>
+        </SidebarProvider>
+      </AdminDataProvider>
     </AuthGate>
   );
 }

@@ -12,14 +12,12 @@ import {
 import {
   createMatkul,
   deleteMatkul,
-  getAllCLOs,
-  getMatkul,
   updateMatkul,
   type Matkul,
 } from "@/lib/supabase/admin-queries";
-import { useAdminProdi } from "@/lib/supabase/useAdminProdi";
+import { useAdminData } from "../AdminDataProvider";
 import Link from "next/link";
-import React, { useEffect, useState } from "react";
+import React, { useMemo, useState } from "react";
 
 const sksOptions = ["1", "2", "3", "4", "5", "6"];
 const semesterOptions = ["1", "2", "3", "4", "5", "6", "7", "8"];
@@ -35,14 +33,17 @@ interface MKForm {
 const emptyForm: MKForm = { kode: "", nama: "", sks: "", semester: "", deskripsi: "" };
 
 export default function AdminCLOPage() {
-  const { data: adminCtx, loading: ctxLoading, error: ctxError } = useAdminProdi();
+  const {
+    adminCtx,
+    matkul: mkList,
+    clos,
+    loading,
+    error: dataError,
+    setMatkul: setMkList,
+  } = useAdminData();
   const [search, setSearch] = useState("");
   const [semesterFilter, setSemesterFilter] = useState("all");
   const [cloStatusFilter, setCloStatusFilter] = useState("all");
-  const [mkList, setMkList] = useState<Matkul[]>([]);
-  const [cloCountMap, setCloCountMap] = useState<Record<string, number>>({});
-  const [mkLoading, setMkLoading] = useState(true);
-  const [mkError, setMkError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
   const [showModal, setShowModal] = useState(false);
@@ -50,34 +51,18 @@ export default function AdminCLOPage() {
   const [form, setForm] = useState<MKForm>(emptyForm);
   const [deleteTarget, setDeleteTarget] = useState<Matkul | null>(null);
 
-  const loading = ctxLoading || mkLoading;
-  const error = formError ?? mkError ?? ctxError;
+  const error = formError ?? dataError;
   const setError = setFormError;
 
-  useEffect(() => {
-    if (!adminCtx) return;
-    let cancelled = false;
-    Promise.all([getMatkul(adminCtx.prodi_id), getAllCLOs()])
-      .then(([matkuls, clos]) => {
-        if (cancelled) return;
-        const matkulIds = new Set(matkuls.map((m) => m.id));
-        const countMap: Record<string, number> = {};
-        clos.forEach((c) => {
-          if (matkulIds.has(c.matkul_id)) {
-            countMap[c.matkul_id] = (countMap[c.matkul_id] ?? 0) + 1;
-          }
-        });
-        setMkList(matkuls);
-        setCloCountMap(countMap);
-        setMkLoading(false);
-      })
-      .catch((e) => {
-        if (!cancelled) { setMkError((e as Error).message); setMkLoading(false); }
-      });
-    return () => { cancelled = true; };
-  }, [adminCtx]);
+  const cloCountMap = useMemo(() => {
+    const map: Record<string, number> = {};
+    clos.forEach((c) => {
+      map[c.matkul_id] = (map[c.matkul_id] ?? 0) + 1;
+    });
+    return map;
+  }, [clos]);
 
-  const totalCLO = Object.values(cloCountMap).reduce((a, b) => a + b, 0);
+  const totalCLO = clos.length;
 
   const filteredMK = mkList.filter((mk) => {
     const matchSearch =
@@ -154,7 +139,7 @@ export default function AdminCLOPage() {
           return;
         }
         const created = await createMatkul(payload);
-        setMkList((list) => [...list, created]);
+        setMkList((list) => (list.some((m) => m.id === created.id) ? list : [...list, created]));
       }
       closeModal();
     } catch (e) {

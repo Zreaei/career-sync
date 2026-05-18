@@ -2,18 +2,10 @@
 
 import Icon from "@/components/ui/Icon";
 import StatCard from "@/components/ui/StatCard";
-import {
-  getAllCLOs,
-  getMatkul,
-  getStudents,
-  getStudentCLOsByMatkul,
-  type CLO,
-  type Matkul,
-  type Student,
-} from "@/lib/supabase/admin-queries";
-import { useAdminProdi } from "@/lib/supabase/useAdminProdi";
+import { type Matkul } from "@/lib/supabase/admin-queries";
+import { useAdminData } from "../AdminDataProvider";
 import Link from "next/link";
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useMemo, useState } from "react";
 
 interface AttentionItem {
   icon: string;
@@ -39,64 +31,23 @@ function coverageStyle(ratio: number) {
 }
 
 export default function AdminDashboard() {
-  const { data: adminCtx, loading: ctxLoading, error: ctxError } = useAdminProdi();
-  const [matkuls, setMatkuls] = useState<Matkul[]>([]);
-  const [clos, setClos] = useState<CLO[]>([]);
-  const [students, setStudents] = useState<Student[]>([]);
-  const [coverageData, setCoverageData] = useState<MKCoverageDetail[]>([]);
-  const [dataLoading, setDataLoading] = useState(true);
-  const [dataError, setDataError] = useState<string | null>(null);
+  const { adminCtx, students, matkul: matkuls, clos, studentClos, loading, error } = useAdminData();
   const [expandedMK, setExpandedMK] = useState<string | null>(null);
 
-  const loading = ctxLoading || dataLoading;
-  const error = dataError ?? ctxError;
-
-  useEffect(() => {
-    if (!adminCtx) return;
-    let cancelled = false;
-
-    (async () => {
-      try {
-        const [matkulData, allClos, studentsData] = await Promise.all([
-          getMatkul(adminCtx.prodi_id),
-          getAllCLOs(),
-          getStudents(adminCtx.prodi_id),
-        ]);
-        if (cancelled) return;
-        const mkIds = new Set(matkulData.map((m) => m.id));
-        const scopedClos = allClos.filter((c) => mkIds.has(c.matkul_id));
-
-        const coverage: MKCoverageDetail[] = await Promise.all(
-          matkulData.map(async (mk) => {
-            const mkClos = scopedClos.filter((c) => c.matkul_id === mk.id);
-            const cloCount = mkClos.length;
-            if (cloCount === 0) {
-              return { mk, cloCount: 0, gradedStudentIds: new Set<string>(), ratio: 0 };
-            }
-            const studentClos = await getStudentCLOsByMatkul(mk.id);
-            const gradedIds = new Set(studentClos.map((sc) => sc.student_id));
-            const ratio = studentsData.length ? gradedIds.size / studentsData.length : 0;
-            return { mk, cloCount, gradedStudentIds: gradedIds, ratio };
-          }),
-        );
-
-        if (!cancelled) {
-          setMatkuls(matkulData);
-          setClos(scopedClos);
-          setStudents(studentsData);
-          setCoverageData(coverage);
-          setDataLoading(false);
-        }
-      } catch (e) {
-        if (!cancelled) {
-          setDataError((e as Error).message);
-          setDataLoading(false);
-        }
+  const coverageData = useMemo<MKCoverageDetail[]>(() => {
+    return matkuls.map((mk) => {
+      const mkCloIds = new Set(clos.filter((c) => c.matkul_id === mk.id).map((c) => c.id));
+      const cloCount = mkCloIds.size;
+      if (cloCount === 0) {
+        return { mk, cloCount: 0, gradedStudentIds: new Set<string>(), ratio: 0 };
       }
-    })();
-
-    return () => { cancelled = true; };
-  }, [adminCtx]);
+      const gradedIds = new Set(
+        studentClos.filter((sc) => mkCloIds.has(sc.clo_id)).map((sc) => sc.student_id),
+      );
+      const ratio = students.length ? gradedIds.size / students.length : 0;
+      return { mk, cloCount, gradedStudentIds: gradedIds, ratio };
+    });
+  }, [matkuls, clos, studentClos, students]);
 
   const stats = useMemo(() => {
     const totalNilai = coverageData.reduce((sum, c) => sum + c.gradedStudentIds.size, 0);

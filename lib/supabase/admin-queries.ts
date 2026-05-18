@@ -59,7 +59,18 @@ export async function createStudent(input: {
     body: input,
   });
   if (error) {
-    const fnMsg = (data as { error?: string } | null)?.error;
+    // supabase-js wraps non-2xx as a generic error; the real reason is in
+    // error.context (a Response). Read it so the UI shows a useful message.
+    let fnMsg: string | undefined = (data as { error?: string } | null)?.error;
+    const ctx = (error as { context?: Response }).context;
+    if (!fnMsg && ctx && typeof ctx.json === "function") {
+      try {
+        const body = await ctx.clone().json();
+        fnMsg = body?.error ?? body?.message;
+      } catch {
+        try { fnMsg = await ctx.clone().text(); } catch { /* ignore */ }
+      }
+    }
     throw new Error(fnMsg ?? error.message);
   }
   if (data && typeof data === "object" && "error" in data && data.error) {
@@ -80,8 +91,25 @@ export async function updateStudent(id: string, updates: Partial<Omit<Student, "
 }
 
 export async function deleteStudent(id: string) {
-  const { error } = await supabase.from("students").delete().eq("id", id);
-  if (error) throw error;
+  // Calls the SECURITY DEFINER function `admin_delete_student` (see
+  // supabase/migrations/20260518_admin_delete_student.sql) which deletes the
+  // students row AND the linked auth.users entry atomically.
+  const { error } = await supabase.rpc("admin_delete_student", {
+    p_student_id: id,
+  });
+  if (!error) return;
+
+  // Function missing -> migration has not been applied. Refuse to fall back
+  // to a plain DELETE: that would silently leave the auth user behind and
+  // block re-registering the email. Surface a clear, actionable error.
+  if ((error as { code?: string }).code === "PGRST202" || /admin_delete_student/i.test(error.message)) {
+    throw new Error(
+      "Setup belum lengkap: fungsi admin_delete_student belum ada di database. " +
+        "Buka Supabase Dashboard → SQL Editor → jalankan isi file " +
+        "supabase/migrations/20260518_admin_delete_student.sql.",
+    );
+  }
+  throw new Error(error.message);
 }
 
 // ─── Matkul ───────────────────────────────────────────────────────────────────
