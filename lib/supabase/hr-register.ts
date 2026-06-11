@@ -8,6 +8,8 @@ export interface RegisterHrInput {
   jobTitle: string;
   companyName: string;
   industry: string | null;
+  location: string | null;
+  size: string | null;
   website: string | null;
 }
 

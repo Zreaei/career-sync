@@ -8,7 +8,7 @@ export interface StudentProfile {
 
 export interface CourseRecord {
   matkul: Matkul;
-  clos: (CLO & { grade: string | null })[];
+  clos: (CLO & { grade: number | null })[];
 }
 
 /**
@@ -78,7 +78,7 @@ export async function getStudentTranscript(
 
   // 4. Assemble records — group CLOs by matkul, attach grade
   const gradeByClo = new Map(studentClos.map((sc) => [sc.clo_id, sc.grade]));
-  const closByMatkul = new Map<string, (CLO & { grade: string | null })[]>();
+  const closByMatkul = new Map<string, (CLO & { grade: number | null })[]>();
   clos.forEach((c) => {
     const list = closByMatkul.get(c.matkul_id) ?? [];
     list.push({ ...c, grade: gradeByClo.get(c.id) ?? null });
@@ -107,13 +107,80 @@ export interface JobListing {
 }
 
 export async function getActiveJobs(): Promise<JobListing[]> {
-  const { data, error } = await supabase
-    .from("jobs")
-    .select(`id, title, location, job_type, category, salary, description, posted_at, deadline, job_skills ( skill )`)
-    .eq("status", "active")
-    .order("posted_at", { ascending: false });
+  const pageSize = 1000;
+  const all: JobListing[] = [];
+  for (let page = 0; ; page++) {
+    const { data, error } = await supabase
+      .from("jobs")
+      .select(
+        `id, title, location, job_type, category, salary, description, posted_at, deadline, job_skills ( skill )`,
+      )
+      .eq("status", "active")
+      .order("posted_at", { ascending: false })
+      .order("id", { ascending: true })
+      .range(page * pageSize, (page + 1) * pageSize - 1);
+    if (error) throw error;
+    const rows = (data ?? []) as JobListing[];
+    all.push(...rows);
+    if (rows.length < pageSize) break;
+  }
+  return all;
+}
+
+// ─── Job match scores (pgvector, grade-weighted) ───────────────────────────
+
+// Returns { job_id: score 0-100 } for every active job, ranked. Scoring runs
+// in Postgres via the `student_job_matches` RPC: for each requirement we use
+// its precomputed best-matching CLO (req_best_clo) weighted by the student's
+// grade on that CLO. No embeddings are sent over the wire — see
+// supabase migration `student_job_match_use_precomputed`.
+//
+// PostgREST caps any single response at db-max-rows (1000 by default), even for
+// RPCs, so we page through with .range() — otherwise jobs ranked below the top
+// 1000 would have no score in the UI.
+export async function getJobMatchScores(
+  studentId: string,
+): Promise<Record<string, number>> {
+  const pageSize = 1000;
+  const out: Record<string, number> = {};
+  for (let page = 0; ; page++) {
+    const { data, error } = await supabase
+      .rpc("student_job_matches", { p_student_id: studentId, p_limit: 100000 })
+      .range(page * pageSize, (page + 1) * pageSize - 1);
+    if (error) throw error;
+    const rows = (data ?? []) as { job_id: string; score: number }[];
+    for (const row of rows) out[row.job_id] = row.score;
+    if (rows.length < pageSize) break;
+  }
+  return out;
+}
+
+// Per-requirement match breakdown for one job: which CLO each requirement maps
+// to, similarity, the student's grade, and the grade-weighted contribution.
+// Powers the "Analisis Kompetensi" tab on /student/jobs/[id].
+export interface ReqMatchBreakdown {
+  requirement_id: string;
+  req_text: string;
+  req_position: number;
+  similarity: number;
+  best_clo_id: string | null;
+  clo_code: string | null;
+  clo_text: string | null;
+  matkul_nama: string | null;
+  grade: number | null;
+  contribution: number;
+}
+
+export async function getJobMatchBreakdown(
+  studentId: string,
+  jobId: string,
+): Promise<ReqMatchBreakdown[]> {
+  const { data, error } = await supabase.rpc("student_job_match_breakdown", {
+    p_student_id: studentId,
+    p_job_id: jobId,
+  });
   if (error) throw error;
-  return (data ?? []) as JobListing[];
+  return (data ?? []) as ReqMatchBreakdown[];
 }
 
 // ─── Student's own applications ────────────────────────────────────────────

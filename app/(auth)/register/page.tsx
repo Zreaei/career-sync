@@ -3,6 +3,10 @@
 import Icon from "@/components/ui/Icon";
 import { signIn } from "@/lib/supabase/auth";
 import { registerHr } from "@/lib/supabase/hr-register";
+import {
+  ensureHrDataInitialized,
+  resetHrDataStore,
+} from "@/lib/supabase/hrDataStore";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useState } from "react";
@@ -15,6 +19,8 @@ interface FormState {
   password: string;
   companyName: string;
   industry: string;
+  location: string;
+  size: string;
   website: string;
 }
 
@@ -26,8 +32,35 @@ const emptyForm: FormState = {
   password: "",
   companyName: "",
   industry: "",
+  location: "",
+  size: "",
   website: "",
 };
+
+// Industry & size options mirror the HR profile page so the values stored at
+// registration render identically on the dashboard / profile screens.
+const industryOptions = [
+  "E-commerce & Marketplace",
+  "Fintech",
+  "Banking",
+  "Telekomunikasi",
+  "Media & Hiburan",
+  "Pendidikan",
+  "Manufaktur",
+  "Logistik & Transportasi",
+  "Pariwisata & Travel",
+  "Konsultan IT",
+];
+
+const sizeOptions = [
+  "1-10 karyawan",
+  "11-50 karyawan",
+  "51-200 karyawan",
+  "201-500 karyawan",
+  "501-1.000 karyawan",
+  "1.000-5.000 karyawan",
+  "5.000+ karyawan",
+];
 
 // Accept either bare domain (tokopedia.com) or full URL. Returns normalized
 // https URL, or null if input is empty / clearly invalid.
@@ -81,10 +114,16 @@ export default function RegisterPage() {
         jobTitle: form.jobTitle.trim(),
         companyName: form.companyName.trim(),
         industry: form.industry || null,
+        location: form.location.trim() || null,
+        size: form.size || null,
         website,
       });
       // Sign in so AuthGate sees a session.
       await signIn(form.email.trim(), form.password);
+      // Eagerly load HR data against the brand-new session before redirecting,
+      // so the dashboard renders populated instead of empty-until-refresh.
+      resetHrDataStore();
+      await ensureHrDataInitialized();
       router.replace("/hr/dashboard");
     } catch (err) {
       setError((err as Error).message);
@@ -329,11 +368,59 @@ export default function RegisterPage() {
                     <option value="" disabled>
                       Select an industry...
                     </option>
-                    <option value="tech">Technology & Software</option>
-                    <option value="finance">Finance & Banking</option>
-                    <option value="education">Education</option>
-                    <option value="health">Healthcare</option>
-                    <option value="other">Other</option>
+                    {industryOptions.map((opt) => (
+                      <option key={opt} value={opt}>
+                        {opt}
+                      </option>
+                    ))}
+                  </select>
+                  <Icon
+                    name="arrow_drop_down"
+                    className="absolute right-3 top-1/2 -translate-y-1/2 text-on-surface-variant pointer-events-none"
+                  />
+                </div>
+              </div>
+
+              <div className="space-y-2">
+                <label className="block font-label text-sm text-on-background" htmlFor="location">
+                  Lokasi Kantor Pusat
+                </label>
+                <div className="relative">
+                  <Icon
+                    name="location_on"
+                    className="absolute left-4 top-1/2 -translate-y-1/2 text-on-surface-variant"
+                  />
+                  <input
+                    id="location"
+                    name="company-location"
+                    autoComplete="off"
+                    className="w-full bg-surface border border-outline-variant text-on-background rounded-lg pl-12 pr-4 py-3 focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary transition-colors font-body"
+                    placeholder="contoh: Jakarta Selatan, Indonesia"
+                    type="text"
+                    value={form.location}
+                    onChange={(e) => update("location", e.target.value)}
+                  />
+                </div>
+              </div>
+
+              <div className="space-y-2">
+                <label className="block font-label text-sm text-on-background" htmlFor="size">
+                  Ukuran Perusahaan
+                </label>
+                <div className="relative">
+                  <select
+                    id="size"
+                    autoComplete="off"
+                    value={form.size}
+                    onChange={(e) => update("size", e.target.value)}
+                    className="w-full appearance-none bg-surface border border-outline-variant text-on-background rounded-lg px-4 py-3 pr-10 focus:outline-none focus:border-primary focus:ring-1 focus:ring-primary transition-colors font-body"
+                  >
+                    <option value="">Pilih ukuran...</option>
+                    {sizeOptions.map((opt) => (
+                      <option key={opt} value={opt}>
+                        {opt}
+                      </option>
+                    ))}
                   </select>
                   <Icon
                     name="arrow_drop_down"

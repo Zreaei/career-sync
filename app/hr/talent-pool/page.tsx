@@ -781,30 +781,10 @@ function StatBox({
   );
 }
 
-function gradeRank(grade: string | null | undefined): number {
-  if (!grade) return -1;
-  const order: Record<string, number> = {
-    A: 7,
-    AB: 6,
-    B: 5,
-    BC: 4,
-    C: 3,
-    D: 2,
-    E: 1,
-  };
-  return order[grade.toUpperCase()] ?? 0;
+function gradeRank(grade: number | null | undefined): number {
+  return typeof grade === "number" ? grade : -1;
 }
 
-function gradePercent(grade: string | null | undefined): number {
-  if (!grade) return 0;
-  const map: Record<string, number> = {
-    A: 95,
-    AB: 87,
-    B: 80,
-    BC: 72,
-    C: 65,
-    D: 55,
-    E: 30,
-  };
-  return map[grade.toUpperCase()] ?? 0;
+function gradePercent(grade: number | null | undefined): number {
+  return typeof grade === "number" ? grade : 0;
 }

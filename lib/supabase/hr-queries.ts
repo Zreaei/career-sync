@@ -1,4 +1,5 @@
 import { supabase } from "./client";
+import { encodeRequirements } from "@/lib/encoding";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -94,16 +95,34 @@ export async function getCurrentHrProfile(): Promise<HRProfileWithCompany> {
 
   // 1. Fetch the HR profile row separately so a missing/forbidden companies
   //    row never masks a perfectly-fine hr_profiles row.
-  const { data: hrRow, error: hrErr } = await supabase
+  let { data: hrRow, error: hrErr } = await supabase
     .from("hr_profiles")
     .select("id, user_id, name, position, company_id")
     .eq("user_id", session.user.id)
     .maybeSingle();
   if (hrErr) throw hrErr;
+
+  // Self-heal: an authenticated user with role=hr but no profile row gets one
+  // auto-provisioned. Name is taken from auth metadata; company_id stays NULL
+  // (user will pick / register their company from the profile page).
   if (!hrRow) {
-    throw new Error(
-      "hr_profile_missing: akun HR ini belum ditautkan ke profil di tabel hr_profiles.",
-    );
+    const meta = session.user.user_metadata ?? {};
+    const fallbackName =
+      (typeof meta.full_name === "string" && meta.full_name.trim()) ||
+      (typeof meta.name === "string" && meta.name.trim()) ||
+      session.user.email?.split("@")[0] ||
+      "HR";
+    const { data: created, error: createErr } = await supabase
+      .from("hr_profiles")
+      .insert({ user_id: session.user.id, name: fallbackName, company_id: null })
+      .select("id, user_id, name, position, company_id")
+      .single();
+    if (createErr) {
+      throw new Error(
+        "hr_profile_missing: akun HR ini belum ditautkan ke profil di tabel hr_profiles.",
+      );
+    }
+    hrRow = created;
   }
 
   // 2. Fetch company independently (may be null if not yet linked).
@@ -186,6 +205,10 @@ export async function createJob(
   skills: string[],
   qualifications: string[],
 ) {
+  // Encode requirement embeddings up front: a failure here aborts before any
+  // DB write, so we never leave a half-created job with no requirements.
+  const reqEmbeddings = await encodeRequirements(qualifications);
+
   const { data: newJob, error: jobErr } = await supabase
     .from("jobs")
     .insert({
@@ -219,6 +242,7 @@ export async function createJob(
           job_id: newJob.id,
           req_text,
           position: i,
+          embedding: reqEmbeddings[i],
         })),
       );
     if (reqErr) throw reqErr;
@@ -233,6 +257,11 @@ export async function updateJob(
   skills?: string[],
   qualifications?: string[],
 ) {
+  // Re-encode replaced requirements before touching the DB, so an encoding
+  // failure aborts the whole update rather than wiping requirements first.
+  const reqEmbeddings =
+    qualifications !== undefined ? await encodeRequirements(qualifications) : [];
+
   const { data, error } = await supabase
     .from("jobs")
     .update(job)
@@ -261,6 +290,7 @@ export async function updateJob(
             job_id: id,
             req_text,
             position: i,
+            embedding: reqEmbeddings[i],
           })),
         );
       if (reqErr) throw reqErr;
@@ -357,7 +387,7 @@ export interface TalentStudent {
 export interface TalentCLOGrade {
   student_id: string;
   clo_id: string;
-  grade: string | null;
+  grade: number | null;
   clos: { clo_code: string | null; clo_text: string; matkul_id: string } | null;
 }
 

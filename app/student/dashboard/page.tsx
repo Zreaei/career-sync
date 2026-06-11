@@ -22,24 +22,6 @@ const STATUS_LABELS: Record<string, { label: string; cls: string }> = {
   rejected: { label: "Ditolak", cls: "bg-red-50 text-red-700" },
 };
 
-function gradePoint(grade: string | null): number | null {
-  if (!grade) return null;
-  const map: Record<string, number> = {
-    A: 4.0,
-    AB: 3.5,
-    "A-": 3.7,
-    "B+": 3.3,
-    B: 3.0,
-    BC: 2.5,
-    "B-": 2.7,
-    "C+": 2.3,
-    C: 2.0,
-    "C-": 1.7,
-    D: 1.0,
-    E: 0,
-  };
-  return map[grade] ?? null;
-}
 
 function matchBadge(score: number | null) {
   const m = score ?? 0;
@@ -62,16 +44,16 @@ function formatDate(iso: string | null): string {
 }
 
 export default function StudentDashboard() {
-  const { profile, transcript, jobs, applications, loading, error } = useStudentData();
+  const { profile, transcript, jobs, applications, matchScores, loading, error } = useStudentData();
 
   const stats = useMemo(() => {
-    const allGrades = transcript.flatMap((c) => c.clos.map((cl) => gradePoint(cl.grade)));
-    const graded = allGrades.filter((g): g is number => g !== null);
+    const allGrades = transcript.flatMap((c) => c.clos.map((cl) => cl.grade));
+    const graded = allGrades.filter((g): g is number => typeof g === "number");
     const totalClos = allGrades.length;
     const achievedClos = graded.length;
-    const ipk = graded.length ? graded.reduce((a, b) => a + b, 0) / graded.length : 0;
+    const avg = graded.length ? graded.reduce((a, b) => a + b, 0) / graded.length : 0;
     return {
-      ipk: ipk.toFixed(2),
+      ipk: avg.toFixed(1),
       cloAchieved: achievedClos,
       cloTotal: totalClos,
       jobsCount: jobs.length,
@@ -83,11 +65,11 @@ export default function StudentDashboard() {
   const topCourses = useMemo(() => {
     return transcript
       .map((course) => {
-        const points = course.clos
-          .map((c) => gradePoint(c.grade))
-          .filter((p): p is number => p !== null);
-        if (points.length === 0) return null;
-        const avg = points.reduce((a, b) => a + b, 0) / points.length;
+        const scores = course.clos
+          .map((c) => c.grade)
+          .filter((g): g is number => typeof g === "number");
+        if (scores.length === 0) return null;
+        const avg = scores.reduce((a, b) => a + b, 0) / scores.length;
         return { name: course.matkul.nama, avg };
       })
       .filter((x): x is { name: string; avg: number } => x !== null)
@@ -95,7 +77,15 @@ export default function StudentDashboard() {
       .slice(0, 4);
   }, [transcript]);
 
-  const recentJobs = jobs.slice(0, 3);
+  // Top 3 rekomendasi: peringkat berdasarkan skor kecocokan (match score).
+  // Skor null (mis. mahasiswa belum punya nilai) ditempatkan paling akhir.
+  const recommendedJobs = useMemo(() => {
+    return jobs
+      .map((job) => ({ ...job, matchScore: matchScores[job.id] ?? null }))
+      .sort((a, b) => (b.matchScore ?? -1) - (a.matchScore ?? -1))
+      .slice(0, 3);
+  }, [jobs, matchScores]);
+
   const recentApplications = applications.slice(0, 3);
 
   if (loading && !profile) {
@@ -136,7 +126,7 @@ export default function StudentDashboard() {
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
         <StatCard
           icon="grade"
-          label="IPK"
+          label="Rerata Nilai"
           value={stats.ipk}
           iconBgClass="bg-primary-fixed"
           iconTextClass="text-primary"
@@ -168,13 +158,13 @@ export default function StudentDashboard() {
               Lihat Semua
             </Link>
           </div>
-          {recentJobs.length === 0 ? (
+          {recommendedJobs.length === 0 ? (
             <p className="font-body text-sm text-on-surface-variant py-6 text-center">
               Belum ada lowongan aktif.
             </p>
           ) : (
             <div className="space-y-4">
-              {recentJobs.map((job) => (
+              {recommendedJobs.map((job) => (
                 <Link
                   key={job.id}
                   href={`/student/jobs/${job.id}`}
@@ -191,11 +181,10 @@ export default function StudentDashboard() {
                       {[job.location ?? "—", job.job_type ?? "—"].join(" · ")}
                     </p>
                   </div>
-                  {job.category && (
-                    <span className="px-3 py-1 rounded-full font-label text-xs font-bold bg-primary-fixed text-primary shrink-0">
-                      {job.category}
-                    </span>
-                  )}
+                  <span className={`inline-flex items-center gap-1 px-3 py-1 rounded-full font-label text-xs font-bold shrink-0 ${matchBadge(job.matchScore)}`}>
+                    <Icon name="bolt" size={12} />
+                    {job.matchScore != null ? `${job.matchScore}%` : "—"}
+                  </span>
                 </Link>
               ))}
             </div>
@@ -221,7 +210,7 @@ export default function StudentDashboard() {
                 <div key={c.name} className="flex justify-between items-center gap-3">
                   <span className="font-label text-sm text-on-surface-variant truncate">{c.name}</span>
                   <span className="px-3 py-1 rounded-full font-label text-xs font-bold bg-green-50 text-green-700 shrink-0">
-                    {c.avg.toFixed(2)}
+                    {c.avg.toFixed(1)}
                   </span>
                 </div>
               ))}

@@ -3,6 +3,7 @@ import { supabase } from "./client";
 import {
   getActiveJobs,
   getCurrentStudentProfile,
+  getJobMatchScores,
   getMyApplications,
   getStudentTranscript,
   type CourseRecord,
@@ -18,6 +19,9 @@ export interface StudentDataState {
   transcript: CourseRecord[];
   jobs: JobListing[];
   applications: StudentApplication[];
+  // { job_id: match score 0-100 }, computed in Postgres from grades + CLO/req
+  // similarity. Empty until loaded; absent job_id ⇒ no score yet.
+  matchScores: Record<string, number>;
   loading: boolean;
   error: string | null;
 }
@@ -27,6 +31,7 @@ const initialState: StudentDataState = {
   transcript: [],
   jobs: [],
   applications: [],
+  matchScores: {},
   loading: false,
   error: null,
 };
@@ -60,6 +65,22 @@ function applyGradeChange(payload: {
     }),
   }));
   setState({ transcript });
+  // Grades changed → match scores are stale. Refetch (debounced — grades often
+  // arrive in bursts when a transcript is imported).
+  scheduleMatchScoreRefresh();
+}
+
+let matchRefreshTimer: ReturnType<typeof setTimeout> | null = null;
+function scheduleMatchScoreRefresh() {
+  const studentId = state.profile?.student.id;
+  if (!studentId) return;
+  if (matchRefreshTimer) clearTimeout(matchRefreshTimer);
+  matchRefreshTimer = setTimeout(() => {
+    matchRefreshTimer = null;
+    getJobMatchScores(studentId)
+      .then((matchScores) => setState({ matchScores }))
+      .catch(() => {});
+  }, 800);
 }
 
 function subscribeRealtime(studentId: string) {
@@ -113,12 +134,13 @@ export function ensureStudentDataInitialized(): Promise<void> {
     setState({ loading: true, error: null });
     try {
       const profile = await getCurrentStudentProfile();
-      const [transcript, jobs, applications] = await Promise.all([
+      const [transcript, jobs, applications, matchScores] = await Promise.all([
         getStudentTranscript(profile.student.id, profile.student.prodi_id),
         getActiveJobs().catch(() => [] as JobListing[]),
         getMyApplications(profile.student.id).catch(() => [] as StudentApplication[]),
+        getJobMatchScores(profile.student.id).catch(() => ({}) as Record<string, number>),
       ]);
-      setState({ profile, transcript, jobs, applications, loading: false, error: null });
+      setState({ profile, transcript, jobs, applications, matchScores, loading: false, error: null });
       subscribeRealtime(profile.student.id);
     } catch (e) {
       setState({ loading: false, error: reportStudentError(e, "studentDataStore.init") });

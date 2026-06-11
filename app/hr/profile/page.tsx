@@ -34,6 +34,7 @@ const industryOptions = [
   "Pendidikan",
   "Manufaktur",
   "Logistik & Transportasi",
+  "Pariwisata & Travel",
   "Konsultan IT",
 ];
 

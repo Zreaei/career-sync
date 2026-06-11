@@ -276,6 +276,14 @@ export const hrDataMutators = {
 
 if (typeof window !== "undefined") {
   supabase.auth.onAuthStateChange((event) => {
-    if (event === "SIGNED_OUT") resetHrDataStore();
+    if (event === "SIGNED_OUT") {
+      resetHrDataStore();
+    } else if (event === "SIGNED_IN") {
+      // A fresh session (login OR just-completed registration) must reload data
+      // from scratch — the module-level initPromise may have resolved earlier
+      // against a different/absent session, so reset before re-initializing.
+      resetHrDataStore();
+      ensureHrDataInitialized().catch(() => {});
+    }
   });
 }

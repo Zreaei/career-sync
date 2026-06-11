@@ -15,43 +15,12 @@ import React, { useMemo, useState } from "react";
 import { useStudentData } from "../StudentDataProvider";
 import type { CourseRecord } from "@/lib/supabase/student-queries";
 
-function gradeColor(grade: string | null) {
-  if (!grade) return "text-on-surface-variant bg-surface-container";
-  if (grade.startsWith("A")) return "text-green-700 bg-green-50";
-  if (grade.startsWith("B")) return "text-blue-700 bg-blue-50";
-  return "text-tertiary bg-tertiary-fixed";
-}
-
-const GRADE_POINT: Record<string, number> = {
-  A: 4.0,
-  AB: 3.5,
-  "A-": 3.7,
-  "B+": 3.3,
-  B: 3.0,
-  BC: 2.5,
-  "B-": 2.7,
-  "C+": 2.3,
-  C: 2.0,
-  "C-": 1.7,
-  D: 1.0,
-  E: 0,
-};
-
-function gradeToNumeric(grade: string | null): number | null {
-  if (!grade) return null;
-  return GRADE_POINT[grade] ?? null;
-}
-
-function avgToLetter(avg: number): string {
-  if (avg >= 3.85) return "A";
-  if (avg >= 3.5) return "A-";
-  if (avg >= 3.15) return "B+";
-  if (avg >= 2.85) return "B";
-  if (avg >= 2.5) return "B-";
-  if (avg >= 2.15) return "C+";
-  if (avg >= 1.85) return "C";
-  if (avg >= 1.0) return "D";
-  return "E";
+function gradeColor(grade: number | null) {
+  if (grade == null) return "text-on-surface-variant bg-surface-container";
+  if (grade >= 85) return "text-green-700 bg-green-50";
+  if (grade >= 70) return "text-blue-700 bg-blue-50";
+  if (grade >= 55) return "text-tertiary bg-tertiary-fixed";
+  return "text-error bg-error-container";
 }
 
 function getInitials(name: string): string {
@@ -62,8 +31,7 @@ function getInitials(name: string): string {
 interface CourseWithStats extends CourseRecord {
   gradedCount: number;
   totalClos: number;
-  avgPoint: number | null;
-  avgLetter: string | null;
+  avgScore: number | null;
 }
 
 export default function ProfilePage() {
@@ -74,26 +42,25 @@ export default function ProfilePage() {
 
   const courses = useMemo<CourseWithStats[]>(() => {
     return transcript.map((course) => {
-      const points = course.clos
-        .map((c) => gradeToNumeric(c.grade))
-        .filter((p): p is number => p !== null);
-      const avgPoint = points.length ? points.reduce((a, b) => a + b, 0) / points.length : null;
+      const scores = course.clos
+        .map((c) => c.grade)
+        .filter((g): g is number => typeof g === "number");
+      const avgScore = scores.length ? scores.reduce((a, b) => a + b, 0) / scores.length : null;
       return {
         ...course,
-        gradedCount: points.length,
+        gradedCount: scores.length,
         totalClos: course.clos.length,
-        avgPoint,
-        avgLetter: avgPoint != null ? avgToLetter(avgPoint) : null,
+        avgScore,
       };
     });
   }, [transcript]);
 
   const totalCLOs = courses.reduce((acc, c) => acc + c.totalClos, 0);
   const totalSKS = courses.reduce((acc, c) => acc + (c.matkul.sks ?? 0), 0);
-  const allPoints = courses
-    .flatMap((c) => c.clos.map((cl) => gradeToNumeric(cl.grade)))
-    .filter((p): p is number => p !== null);
-  const ipk = allPoints.length ? (allPoints.reduce((a, b) => a + b, 0) / allPoints.length).toFixed(2) : "—";
+  const allScores = courses
+    .flatMap((c) => c.clos.map((cl) => cl.grade))
+    .filter((g): g is number => typeof g === "number");
+  const ipk = allScores.length ? (allScores.reduce((a, b) => a + b, 0) / allScores.length).toFixed(1) : "—";
 
   const semesters = useMemo(
     () => [...new Set(courses.map((c) => c.matkul.semester).filter((s): s is number => s != null))].sort(),
@@ -259,8 +226,8 @@ export default function ProfilePage() {
                 </TableRow>
               ) : filteredCourses.map((course) => {
                 const isExpanded = expandedCourse === course.matkul.id;
-                const avgDisplay = course.avgLetter
-                  ? `${course.avgLetter} (${course.avgPoint!.toFixed(2)})`
+                const avgDisplay = course.avgScore != null
+                  ? course.avgScore.toFixed(1)
                   : "—";
                 return (
                   <React.Fragment key={course.matkul.id}>
@@ -288,8 +255,8 @@ export default function ProfilePage() {
                         {course.gradedCount}/{course.totalClos}
                       </TableCell>
                       <TableCell className="text-center">
-                        {course.avgLetter ? (
-                          <span className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full font-label text-xs font-bold ${gradeColor(course.avgLetter)}`}>
+                        {course.avgScore != null ? (
+                          <span className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full font-label text-xs font-bold ${gradeColor(course.avgScore)}`}>
                             {avgDisplay}
                           </span>
                         ) : (
@@ -332,7 +299,7 @@ export default function ProfilePage() {
                           </div>
                         </TableCell>
                         <TableCell className="text-center">
-                          {clo.grade ? (
+                          {clo.grade != null ? (
                             <span className={`inline-flex px-2.5 py-1 rounded-full font-label text-xs font-bold ${gradeColor(clo.grade)}`}>
                               {clo.grade}
                             </span>

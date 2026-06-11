@@ -1,11 +1,17 @@
 "use client";
 
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import Icon from "@/components/ui/Icon";
 import TopBar from "@/components/layout/TopBar";
-import { getJobById, type JobDetail } from "@/lib/supabase/student-queries";
+import {
+  getJobById,
+  getJobMatchBreakdown,
+  type JobDetail,
+  type ReqMatchBreakdown,
+} from "@/lib/supabase/student-queries";
+import { useStudentData } from "@/app/student/StudentDataProvider";
 import { reportStudentError } from "@/lib/supabase/studentErrors";
 
 function formatDate(iso: string | null): string {
@@ -17,22 +23,50 @@ function formatDate(iso: string | null): string {
   });
 }
 
-function ScoreRingPlaceholder() {
+// Tailwind text-color class for a 0-100 score (null = no score yet).
+function scoreColor(score: number | null): string {
+  if (score == null) return "text-on-surface-variant";
+  if (score >= 85) return "text-green-600";
+  if (score >= 70) return "text-primary";
+  if (score >= 55) return "text-tertiary";
+  return "text-error";
+}
+
+// Stroke color for the SVG ring — mirrors scoreColor but for `stroke`.
+function ringStroke(score: number | null): string {
+  if (score == null) return "text-surface-container";
+  if (score >= 85) return "text-green-600";
+  if (score >= 70) return "text-primary";
+  if (score >= 55) return "text-tertiary";
+  return "text-error";
+}
+
+function ScoreRing({ score }: { score: number | null }) {
+  const r = 42;
+  const circ = 2 * Math.PI * r;
+  const pct = Math.max(0, Math.min(100, score ?? 0));
+  const offset = circ * (1 - pct / 100);
   return (
     <div className="relative flex items-center justify-center w-28 h-28">
       <svg width="112" height="112" viewBox="0 0 112 112" className="-rotate-90">
         <circle
-          cx="56"
-          cy="56"
-          r={42}
-          fill="none"
-          stroke="currentColor"
-          strokeWidth="8"
+          cx="56" cy="56" r={r}
+          fill="none" stroke="currentColor" strokeWidth="8"
           className="text-surface-container"
         />
+        {score != null && (
+          <circle
+            cx="56" cy="56" r={r}
+            fill="none" stroke="currentColor" strokeWidth="8" strokeLinecap="round"
+            strokeDasharray={circ} strokeDashoffset={offset}
+            className={`${ringStroke(score)} transition-[stroke-dashoffset] duration-700`}
+          />
+        )}
       </svg>
       <div className="absolute text-center">
-        <p className="font-headline text-2xl font-bold text-on-surface-variant">—</p>
+        <p className={`font-headline text-2xl font-bold ${scoreColor(score)}`}>
+          {score != null ? `${score}%` : "—"}
+        </p>
         <p className="font-label text-[10px] text-on-surface-variant">match</p>
       </div>
     </div>
@@ -41,38 +75,82 @@ function ScoreRingPlaceholder() {
 
 export default function JobDetailPage() {
   const params = useParams<{ id: string }>();
+  const { profile, matchScores } = useStudentData();
+  const studentId = profile?.student.id ?? null;
   const [activeTab, setActiveTab] = useState<"overview" | "analysis">("overview");
-  const [job, setJob] = useState<JobDetail | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [notFound, setNotFound] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  // Single load-state object so the loading effect never has to call setState
+  // synchronously in its body (which triggers cascading renders).
+  const [loadState, setLoadState] = useState<{
+    status: "loading" | "ready" | "notfound" | "error";
+    job: JobDetail | null;
+    error: string | null;
+  }>({ status: "loading", job: null, error: null });
+  const [breakdown, setBreakdown] = useState<ReqMatchBreakdown[]>([]);
+  // requirement_ids whose detail table is expanded.
+  const [openReqs, setOpenReqs] = useState<Set<string>>(new Set());
+
+  const { status, job, error } = loadState;
+  const loading = status === "loading";
+  const notFound = status === "notfound";
 
   useEffect(() => {
     if (!params?.id) return;
     let alive = true;
-    setLoading(true);
-    setError(null);
-    setNotFound(false);
     getJobById(params.id)
       .then((data) => {
         if (!alive) return;
-        if (!data) {
-          setNotFound(true);
-        } else {
-          setJob(data);
-        }
+        if (!data) setLoadState({ status: "notfound", job: null, error: null });
+        else setLoadState({ status: "ready", job: data, error: null });
       })
       .catch((e) => {
         if (!alive) return;
-        setError(reportStudentError(e, "jobs.detail.load"));
-      })
-      .finally(() => {
-        if (alive) setLoading(false);
+        setLoadState({
+          status: "error",
+          job: null,
+          error: reportStudentError(e, "jobs.detail.load"),
+        });
       });
     return () => {
       alive = false;
     };
   }, [params?.id]);
+
+  // Per-requirement match breakdown. Needs both the job id and the logged-in
+  // student; refetches if either changes.
+  useEffect(() => {
+    const jobId = params?.id;
+    if (!jobId || !studentId) return;
+    let alive = true;
+    getJobMatchBreakdown(studentId, jobId)
+      .then((rows) => alive && setBreakdown(rows))
+      .catch(() => alive && setBreakdown([]));
+    return () => {
+      alive = false;
+    };
+  }, [params?.id, studentId]);
+
+  // Overall match score: prefer the value already in the store (same RPC as the
+  // job list), fall back to averaging the breakdown contributions.
+  const overallScore: number | null = useMemo(() => {
+    if (params?.id && matchScores[params.id] != null) return matchScores[params.id];
+    if (breakdown.length === 0) return null;
+    const sum = breakdown.reduce((s, r) => s + r.contribution, 0);
+    return Math.round(sum / breakdown.length);
+  }, [params?.id, matchScores, breakdown]);
+
+  // Top contributing competencies, for the overview summary card.
+  const topMatches = useMemo(
+    () => [...breakdown].sort((a, b) => b.contribution - a.contribution).slice(0, 3),
+    [breakdown],
+  );
+
+  // requirement_id → breakdown row, so the analysis cards can show the matched
+  // CLO + score per requirement.
+  const breakdownByReq = useMemo(() => {
+    const m = new Map<string, ReqMatchBreakdown>();
+    for (const r of breakdown) m.set(r.requirement_id, r);
+    return m;
+  }, [breakdown]);
 
   if (loading) {
     return (
@@ -169,7 +247,7 @@ export default function JobDetailPage() {
             </div>
 
             <div className="flex flex-col items-center gap-4 shrink-0">
-              <ScoreRingPlaceholder />
+              <ScoreRing score={overallScore} />
               <button className="btn-gradient rounded-xl px-8 py-3 font-label font-bold shadow-[0_4px_14px_rgb(9,76,178,0.25)] flex items-center gap-2 whitespace-nowrap">
                 <Icon name="send" size={18} /> Lamar Sekarang
               </button>
@@ -250,65 +328,156 @@ export default function JobDetailPage() {
               </div>
 
               <div className="bg-surface-container-lowest rounded-2xl p-6 shadow-ambient ghost-border">
-                <h2 className="font-headline text-lg font-bold text-on-background mb-2">
+                <h2 className="font-headline text-lg font-bold text-on-background mb-3">
                   Ringkasan Kecocokan
                 </h2>
-                <p className="font-body text-xs text-on-surface-variant leading-relaxed">
-                  Analisis kompetensi akan ditampilkan setelah fitur pencocokan diaktifkan.
-                </p>
+                {!studentId ? (
+                  <p className="font-body text-xs text-on-surface-variant leading-relaxed">
+                    Masuk sebagai mahasiswa untuk melihat kecocokan kompetensi Anda.
+                  </p>
+                ) : topMatches.length === 0 ? (
+                  <p className="font-body text-xs text-on-surface-variant leading-relaxed">
+                    Belum ada data kompetensi yang cocok untuk lowongan ini.
+                  </p>
+                ) : (
+                  <>
+                    <p className="font-body text-xs text-on-surface-variant mb-3">
+                      Kompetensi Anda yang paling relevan:
+                    </p>
+                    <ul className="space-y-2.5">
+                      {topMatches.map((m) => (
+                        <li key={m.requirement_id} className="flex items-center justify-between gap-2">
+                          <span className="font-label text-xs text-on-surface truncate">
+                            {m.clo_code ? `${m.clo_code} · ` : ""}{m.matkul_nama ?? "—"}
+                          </span>
+                          <span className={`font-label text-xs font-bold shrink-0 ${scoreColor(m.contribution)}`}>
+                            {m.contribution}%
+                          </span>
+                        </li>
+                      ))}
+                    </ul>
+                    <button
+                      onClick={() => setActiveTab("analysis")}
+                      className="mt-4 font-label text-xs font-semibold text-primary hover:underline inline-flex items-center gap-1"
+                    >
+                      Lihat analisis lengkap <Icon name="arrow_forward" size={14} />
+                    </button>
+                  </>
+                )}
               </div>
             </div>
           </div>
         )}
 
         {activeTab === "analysis" && (
-          <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-            <div className="lg:col-span-2 space-y-4">
-              {job.requirements.length === 0 ? (
-                <div className="bg-surface-container-lowest rounded-2xl p-6 shadow-ambient ghost-border">
-                  <p className="font-body text-sm text-on-surface-variant">
-                    Perusahaan belum menambahkan daftar kualifikasi untuk lowongan ini.
-                  </p>
-                </div>
-              ) : (
-                job.requirements.map((req) => (
-                  <div
-                    key={req.id}
-                    className="bg-surface-container-lowest rounded-2xl p-5 shadow-ambient ghost-border"
-                  >
-                    <div className="flex items-start gap-4">
-                      <div className="w-9 h-9 rounded-xl flex items-center justify-center shrink-0 bg-surface-container">
-                        <Icon name="checklist" className="text-on-surface-variant" size={20} />
-                      </div>
-                      <div className="flex-1 min-w-0">
-                        <div className="flex items-center justify-between gap-3 mb-1">
-                          <p className="font-body text-sm font-semibold text-on-background">
-                            {req.req_text}
-                          </p>
-                          <span className="font-label text-xs font-bold px-2 py-0.5 rounded bg-surface-container text-on-surface-variant shrink-0">
-                            —
-                          </span>
-                        </div>
-                        <div className="h-1.5 bg-surface-container rounded-full mt-2" />
-                      </div>
-                    </div>
-                  </div>
-                ))
-              )}
-            </div>
-
-            <div className="space-y-6">
-              <div className="bg-primary-fixed/30 rounded-2xl p-4">
-                <div className="flex items-start gap-3">
-                  <Icon name="info" className="text-primary mt-0.5 shrink-0" size={18} />
-                  <p className="font-body text-xs text-on-surface-variant leading-relaxed">
-                    Skor kecocokan per kualifikasi akan tersedia setelah model pencocokan
-                    kompetensi diintegrasikan. Saat ini hanya menampilkan daftar kualifikasi
-                    dari perusahaan.
-                  </p>
-                </div>
+          <div className="space-y-5">
+            {/* How scoring works */}
+            <div className="bg-primary-fixed/30 rounded-2xl p-4">
+              <div className="flex items-start gap-3">
+                <Icon name="info" className="text-primary mt-0.5 shrink-0" size={18} />
+                <p className="font-body text-xs text-on-surface-variant leading-relaxed">
+                  Tiap kualifikasi dicocokkan ke CLO yang paling mirip, lalu skornya =
+                  kemiripan × nilai Anda pada CLO tersebut. Kualifikasi tanpa CLO yang
+                  relevan atau yang belum Anda ambil akan bernilai rendah.
+                </p>
               </div>
             </div>
+
+            {job.requirements.length === 0 ? (
+              <div className="bg-surface-container-lowest rounded-2xl p-6 shadow-ambient ghost-border">
+                <p className="font-body text-sm text-on-surface-variant">
+                  Perusahaan belum menambahkan daftar kualifikasi untuk lowongan ini.
+                </p>
+              </div>
+            ) : (
+              <div className="space-y-3">
+                {job.requirements.map((req, idx) => {
+                  const b = breakdownByReq.get(req.id);
+                  const contribution = b?.contribution ?? null;
+                  const sim = b ? Math.round(b.similarity * 100) : null;
+                  const isOpen = openReqs.has(req.id);
+                  const hasClo = !!b?.clo_code;
+                  return (
+                    <div
+                      key={req.id}
+                      className="bg-surface-container-lowest rounded-2xl shadow-ambient ghost-border overflow-hidden"
+                    >
+                      {/* Requirement header — click to toggle */}
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setOpenReqs((prev) => {
+                            const next = new Set(prev);
+                            if (next.has(req.id)) next.delete(req.id);
+                            else next.add(req.id);
+                            return next;
+                          })
+                        }
+                        aria-expanded={isOpen}
+                        className="w-full text-left px-5 py-4 flex items-center gap-3 hover:bg-surface-container-high/50 transition-colors"
+                      >
+                        <span className="font-label text-xs text-on-surface-variant shrink-0">{idx + 1}.</span>
+                        <span className="flex-1 min-w-0 font-body text-sm font-semibold text-on-background">
+                          {req.req_text}
+                        </span>
+                        <span className={`font-label text-xs font-bold px-2 py-0.5 rounded bg-surface-container shrink-0 ${scoreColor(contribution)}`}>
+                          {contribution != null ? `${contribution}%` : "—"}
+                        </span>
+                        <Icon
+                          name="expand_more"
+                          size={20}
+                          className={`text-on-surface-variant shrink-0 transition-transform ${isOpen ? "rotate-180" : ""}`}
+                        />
+                      </button>
+
+                      {/* Expanded detail — table of the matched CLO */}
+                      {isOpen && (
+                        <div className="px-5 pb-5 pt-1">
+                          {hasClo ? (
+                            <table className="w-full border-collapse text-sm table-fixed">
+                              <thead>
+                                <tr className="border-b-2 border-outline-variant/40">
+                                  <th className="w-[18%] text-left font-label text-xs font-bold text-on-surface-variant px-3 py-2">Matkul</th>
+                                  <th className="w-[4.5rem] text-center font-label text-xs font-bold text-on-surface-variant px-3 py-2">Nilai</th>
+                                  <th className="text-left font-label text-xs font-bold text-on-surface-variant px-3 py-2">CLO</th>
+                                </tr>
+                              </thead>
+                              <tbody>
+                                <tr className="align-top">
+                                  <td className="px-3 py-2.5 font-label text-xs text-on-surface">
+                                    {b!.matkul_nama ?? "—"}
+                                  </td>
+                                  <td className="px-3 py-2.5 text-center font-label text-sm font-semibold text-on-surface">
+                                    {b!.grade != null ? b!.grade : "—"}
+                                  </td>
+                                  <td className="px-3 py-2.5 font-body text-sm text-on-surface leading-relaxed">
+                                    <span className="font-semibold text-primary">{b!.clo_code}</span>
+                                    {" — "}
+                                    {b!.clo_text ?? "Teks CLO tidak tersedia."}
+                                  </td>
+                                </tr>
+                              </tbody>
+                            </table>
+                          ) : (
+                            <p className="px-3 font-body text-xs text-on-surface-variant italic">
+                              Tidak ada CLO yang relevan untuk kualifikasi ini.
+                            </p>
+                          )}
+                          {sim != null && (
+                            <p className="px-3 mt-2 font-label text-[11px] text-on-surface-variant">
+                              Kemiripan {sim}% × nilai {b!.grade ?? 0} ={" "}
+                              <span className={`font-bold ${scoreColor(contribution)}`}>
+                                {contribution ?? 0}% kontribusi
+                              </span>
+                            </p>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
           </div>
         )}
       </div>

@@ -25,6 +25,14 @@ function relativeTime(iso: string | null): string {
   return d.toLocaleDateString("id-ID", { day: "numeric", month: "short", year: "numeric" });
 }
 
+function matchBadgeClass(score: number | null): string {
+  if (score == null) return "bg-surface-container text-on-surface-variant";
+  if (score >= 85) return "bg-green-50 text-green-700";
+  if (score >= 70) return "bg-primary-fixed text-primary";
+  if (score >= 55) return "bg-tertiary-fixed text-on-tertiary-container";
+  return "bg-error-container text-error";
+}
+
 function DropdownFilter({
   name,
   label,
@@ -95,14 +103,18 @@ function DropdownFilter({
   );
 }
 
+const PAGE_SIZE = 12;
+
 export default function JobMatchingPage() {
-  const { jobs, loading, error, profile } = useStudentData();
+  const { jobs, matchScores, loading, error, profile } = useStudentData();
 
   const [search, setSearch] = useState("");
   const [locationSearch, setLocationSearch] = useState("");
   const [typeFilter, setTypeFilter] = useState("all");
   const [categoryFilter, setCategoryFilter] = useState("all");
   const [openDropdown, setOpenDropdown] = useState<string | null>(null);
+  const [visibleCount, setVisibleCount] = useState(PAGE_SIZE);
+  const sentinelRef = useRef<HTMLDivElement>(null);
 
   const categoryOptions = useMemo(() => {
     const cats = [...new Set(jobs.map((j) => j.category).filter((c): c is string => !!c))].sort();
@@ -111,15 +123,63 @@ export default function JobMatchingPage() {
 
   const activeFilterCount = [typeFilter !== "all", categoryFilter !== "all"].filter(Boolean).length;
 
+  // Match scores are computed in Postgres (grade-weighted CLO↔requirement
+  // similarity) and arrive via the student data store. A job missing from the
+  // map has no score yet (e.g. student has no grades) → null.
+  const scoredJobs = useMemo(() => {
+    return jobs.map((job) => ({
+      ...job,
+      matchScore: matchScores[job.id] ?? null,
+    }));
+  }, [jobs, matchScores]);
+
   const filteredJobs = useMemo(() => {
-    return jobs.filter((job) => {
+    const filtered = scoredJobs.filter((job) => {
       const matchesSearch = job.title.toLowerCase().includes(search.toLowerCase());
       const matchesLocation = !locationSearch || (job.location ?? "").toLowerCase().includes(locationSearch.toLowerCase());
       const matchesType = typeFilter === "all" || job.job_type === typeFilter;
       const matchesCategory = categoryFilter === "all" || job.category === categoryFilter;
       return matchesSearch && matchesLocation && matchesType && matchesCategory;
     });
-  }, [jobs, search, locationSearch, typeFilter, categoryFilter]);
+    // Sort: highest match first; nulls (no grades) go last
+    filtered.sort((a, b) => {
+      const sa = a.matchScore ?? -1;
+      const sb = b.matchScore ?? -1;
+      return sb - sa;
+    });
+    return filtered;
+  }, [scoredJobs, search, locationSearch, typeFilter, categoryFilter]);
+
+  // Reset the visible window whenever the filters change (new search, filter)
+  // so the user starts from the top. Done by adjusting state during render
+  // rather than in an effect — avoids the extra commit + cascading render.
+  // See https://react.dev/learn/you-might-not-need-an-effect#adjusting-some-state-when-a-prop-changes
+  const filterKey = `${search}|${locationSearch}|${typeFilter}|${categoryFilter}`;
+  const [prevFilterKey, setPrevFilterKey] = useState(filterKey);
+  if (prevFilterKey !== filterKey) {
+    setPrevFilterKey(filterKey);
+    setVisibleCount(PAGE_SIZE);
+  }
+
+  const visibleJobs = filteredJobs.slice(0, visibleCount);
+  const hasMore = visibleCount < filteredJobs.length;
+
+  // Infinite scroll: grow the window when the sentinel scrolls into view.
+  useEffect(() => {
+    if (!hasMore) return;
+    const sentinel = sentinelRef.current;
+    if (!sentinel) return;
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries[0].isIntersecting) {
+          setVisibleCount((c) => Math.min(c + PAGE_SIZE, filteredJobs.length));
+        }
+      },
+      { rootMargin: "400px" }
+    );
+    observer.observe(sentinel);
+    return () => observer.disconnect();
+  }, [hasMore, filteredJobs.length]);
 
   function resetFilters() {
     setTypeFilter("all");
@@ -204,7 +264,7 @@ export default function JobMatchingPage() {
         </div>
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          {filteredJobs.map((job) => (
+          {visibleJobs.map((job) => (
             <Link
               key={job.id}
               href={`/student/jobs/${job.id}`}
@@ -219,6 +279,10 @@ export default function JobMatchingPage() {
                     <p className="font-label text-sm text-on-surface-variant mt-1">{job.category}</p>
                   )}
                 </div>
+                <span className={`shrink-0 inline-flex items-center gap-1 px-2.5 py-1 rounded-full font-label text-xs font-bold ${matchBadgeClass(job.matchScore)}`}>
+                  <Icon name="bolt" size={12} />
+                  {job.matchScore != null ? `${job.matchScore}%` : "—"}
+                </span>
               </div>
 
               {job.job_skills.length > 0 && (
@@ -244,6 +308,15 @@ export default function JobMatchingPage() {
               </div>
             </Link>
           ))}
+        </div>
+      )}
+
+      {hasMore && (
+        <div ref={sentinelRef} className="flex justify-center py-6">
+          <div className="flex items-center gap-2 font-label text-sm text-on-surface-variant">
+            <Icon name="progress_activity" size={18} className="animate-spin" />
+            Memuat lowongan...
+          </div>
         </div>
       )}
     </div>

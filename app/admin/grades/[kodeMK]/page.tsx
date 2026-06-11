@@ -26,14 +26,13 @@ import {
 } from "@/lib/supabase/admin-queries";
 import { reportAdminError } from "@/lib/supabase/adminErrors";
 
-const gradeOptions = ["A", "AB", "B", "BC", "C", "D", "E"];
-
-const gradeColor = (g: string) => {
-  if (g === "A") return "bg-green-100 text-green-800";
-  if (g === "AB") return "bg-blue-100 text-blue-700";
-  if (g === "B") return "bg-primary-fixed text-primary";
-  if (g === "BC") return "bg-tertiary-fixed text-on-tertiary-container";
-  if (g === "C") return "bg-amber-100 text-amber-700";
+const gradeColor = (g: number | null) => {
+  if (g == null) return "bg-error-container text-error";
+  if (g >= 85) return "bg-green-100 text-green-800";
+  if (g >= 75) return "bg-blue-100 text-blue-700";
+  if (g >= 65) return "bg-primary-fixed text-primary";
+  if (g >= 55) return "bg-tertiary-fixed text-on-tertiary-container";
+  if (g >= 40) return "bg-amber-100 text-amber-700";
   return "bg-error-container text-error";
 };
 
@@ -67,7 +66,7 @@ export default function MKGradesMatrixPage() {
   const [angkatanFilter, setAngkatanFilter] = useState("all");
   const [statusFilter, setStatusFilter] = useState("all");
   const [target, setTarget] = useState<CellTarget | null>(null);
-  const [gradeForm, setGradeForm] = useState("");
+  const [gradeForm, setGradeForm] = useState<string>("");
   const [deleteTarget, setDeleteTarget] = useState<StudentCLO | null>(null);
 
   useEffect(() => {
@@ -149,19 +148,25 @@ export default function MKGradesMatrixPage() {
   const openCell = (studentId: string, cloId: string) => {
     const existing = gradeMap.get(studentId)?.get(cloId) ?? null;
     setTarget({ studentId, cloId, existing });
-    setGradeForm(existing?.grade ?? "");
+    setGradeForm(existing?.grade != null ? String(existing.grade) : "");
   };
 
   const closeModal = () => { setTarget(null); setGradeForm(""); setError(null); };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!target || !gradeForm) return;
+    if (!target || gradeForm.trim() === "") return;
+    const numeric = Number(gradeForm);
+    if (!Number.isFinite(numeric) || numeric < 0 || numeric > 100) {
+      setError("Nilai harus angka 0 - 100.");
+      return;
+    }
+    const rounded = Math.round(numeric);
     setSaving(true);
     setError(null);
     try {
-      await upsertStudentCLO(target.studentId, target.cloId, gradeForm);
-      const newSC: StudentCLO = { student_id: target.studentId, clo_id: target.cloId, grade: gradeForm };
+      await upsertStudentCLO(target.studentId, target.cloId, rounded);
+      const newSC: StudentCLO = { student_id: target.studentId, clo_id: target.cloId, grade: rounded };
       setStudentCLOs((prev) => {
         const filtered = prev.filter(
           (sc) => !(sc.student_id === target.studentId && sc.clo_id === target.cloId),
@@ -261,18 +266,19 @@ export default function MKGradesMatrixPage() {
             <form onSubmit={handleSubmit} className="space-y-4">
               <div>
                 <label className="font-label text-sm text-on-surface-variant mb-1.5 block">
-                  Grade <span className="text-error">*</span>
+                  Nilai (0 - 100) <span className="text-error">*</span>
                 </label>
-                <Select value={gradeForm || undefined} onValueChange={setGradeForm}>
-                  <SelectTrigger className="h-12 w-full">
-                    <SelectValue placeholder="Pilih Grade" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {gradeOptions.map((g) => (
-                      <SelectItem key={g} value={g}>{g}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
+                <input
+                  type="number"
+                  min={0}
+                  max={100}
+                  step={1}
+                  value={gradeForm}
+                  onChange={(e) => setGradeForm(e.target.value)}
+                  placeholder="Masukkan nilai 0-100"
+                  className="h-12 w-full px-4 rounded-xl border border-outline/30 bg-surface-container-low font-body text-sm text-on-background focus:border-primary focus:outline-none transition-colors"
+                  autoFocus
+                />
               </div>
               <div className="flex gap-3 pt-2">
                 {target.existing && (
@@ -457,8 +463,8 @@ export default function MKGradesMatrixPage() {
                                     onClick={() => openCell(r.student.id, c.id)}
                                     className="group inline-flex flex-col items-center gap-0.5 px-3 py-1.5 rounded-lg hover:bg-surface-container transition-colors w-full max-w-24 mx-auto"
                                   >
-                                    <span className={`px-2.5 py-0.5 rounded-full font-label text-xs font-bold ${gradeColor(sc.grade ?? "")}`}>
-                                      {sc.grade}
+                                    <span className={`px-2.5 py-0.5 rounded-full font-label text-xs font-bold ${gradeColor(sc.grade)}`}>
+                                      {sc.grade ?? "—"}
                                     </span>
                                   </button>
                                 ) : (

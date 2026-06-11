@@ -1,4 +1,5 @@
 import { supabase } from "./client";
+import { encodeClo } from "@/lib/encoding";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -33,7 +34,7 @@ export interface CLO {
 export interface StudentCLO {
   student_id: string;
   clo_id: string;
-  grade: string | null;
+  grade: number | null;
 }
 
 // ─── Students ─────────────────────────────────────────────────────────────────
@@ -180,21 +181,30 @@ export async function getAllCLOs() {
 }
 
 export async function createCLO(clo: Omit<CLO, "id">) {
+  // Encode the CLO text first (clo → query side); abort before inserting if it
+  // fails. Don't .select() the embedding back — it's a 1024-float vector.
+  const embedding = await encodeClo(clo.clo_text);
   const { data, error } = await supabase
     .from("clos")
-    .insert(clo)
-    .select()
+    .insert({ ...clo, embedding })
+    .select("id, matkul_id, clo_code, clo_text")
     .single();
   if (error) throw error;
   return data as CLO;
 }
 
 export async function updateCLO(id: string, updates: Partial<Omit<CLO, "id">>) {
+  // Re-encode only when the text changes — clo_code/matkul_id edits don't
+  // affect the embedding.
+  const patch: Record<string, unknown> = { ...updates };
+  if (updates.clo_text !== undefined) {
+    patch.embedding = await encodeClo(updates.clo_text);
+  }
   const { data, error } = await supabase
     .from("clos")
-    .update(updates)
+    .update(patch)
     .eq("id", id)
-    .select()
+    .select("id, matkul_id, clo_code, clo_text")
     .single();
   if (error) throw error;
   return data as CLO;
@@ -229,7 +239,7 @@ export async function getStudentCLOsByMatkul(matkulId: string) {
   return (data ?? []) as unknown as StudentCLOWithDetails[];
 }
 
-export async function upsertStudentCLO(studentId: string, cloId: string, grade: string) {
+export async function upsertStudentCLO(studentId: string, cloId: string, grade: number) {
   const { error } = await supabase
     .from("student_clos")
     .upsert({ student_id: studentId, clo_id: cloId, grade }, { onConflict: "student_id,clo_id" });
