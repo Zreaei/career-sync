@@ -6,6 +6,7 @@ import {
   getCurrentHrProfile,
   getJobs,
   getProdiNames,
+  getReqBestClos,
   getTalentGrades,
   getTalentInvitations,
   getTalentStudents,
@@ -13,6 +14,7 @@ import {
   type Company,
   type HRProfileWithCompany,
   type JobWithSkills,
+  type ReqBestCloRow,
   type TalentCLOGrade,
   type TalentInvitation,
   type TalentStudent,
@@ -26,6 +28,9 @@ export interface HRDataState {
   applications: ApplicationWithDetails[];
   talents: TalentStudent[];
   talentGrades: TalentCLOGrade[];
+  // req_best_clo rows for this HR's jobs — the inputs used to reproduce the
+  // student-side match score (see lib/hr-match.ts).
+  reqBestClos: ReqBestCloRow[];
   invitations: TalentInvitation[];
   prodiNames: Record<string, string>;
   loading: boolean;
@@ -39,6 +44,7 @@ const initialState: HRDataState = {
   applications: [],
   talents: [],
   talentGrades: [],
+  reqBestClos: [],
   invitations: [],
   prodiNames: {},
   loading: false,
@@ -49,6 +55,9 @@ let state: HRDataState = initialState;
 let initPromise: Promise<void> | null = null;
 let channels: RealtimeChannel[] = [];
 const listeners = new Set<() => void>();
+// Auth user the cache currently holds data for. Used to ignore the redundant
+// SIGNED_IN events auth-js re-emits on tab refocus (see the listener below).
+let currentUserId: string | null = null;
 
 function setState(patch: Partial<HRDataState>) {
   state = { ...state, ...patch };
@@ -83,7 +92,12 @@ function subscribeRealtime(hrId: string, companyId: string | null) {
       async () => {
         try {
           const next = await getJobs({ hrId });
-          setState({ jobs: next });
+          // Job edits also replace requirements (→ new req_best_clo rows), so
+          // refresh the scoring inputs alongside the jobs themselves.
+          const rbc = await getReqBestClos(next.map((j) => j.id)).catch(
+            () => [] as ReqBestCloRow[],
+          );
+          setState({ jobs: next, reqBestClos: rbc });
         } catch {
           /* ignore */
         }
@@ -198,6 +212,10 @@ export function ensureHrDataInitialized(): Promise<void> {
     setState({ loading: true, error: null });
     try {
       const hr = await getCurrentHrProfile();
+      // Keep the tracked user in sync for callers that init directly (login /
+      // registration prefetch), so the SIGNED_IN that follows is treated as a
+      // redundant re-fire and does not trigger a second reload.
+      currentUserId = hr.user_id ?? currentUserId;
 
       const [jobs, talents, prodiNames] = await Promise.all([
         getJobs({ hrId: hr.id }),
@@ -206,12 +224,13 @@ export function ensureHrDataInitialized(): Promise<void> {
       ]);
 
       const jobIds = jobs.map((j) => j.id);
-      const [applications, invitations, talentGrades] = await Promise.all([
+      const [applications, invitations, talentGrades, reqBestClos] = await Promise.all([
         jobIds.length
           ? getApplications({ jobIds }).catch(() => [] as ApplicationWithDetails[])
           : Promise.resolve([] as ApplicationWithDetails[]),
         getTalentInvitations(hr.id).catch(() => [] as TalentInvitation[]),
         getTalentGrades(talents.map((t) => t.id)).catch(() => [] as TalentCLOGrade[]),
+        getReqBestClos(jobIds).catch(() => [] as ReqBestCloRow[]),
       ]);
 
       setState({
@@ -221,6 +240,7 @@ export function ensureHrDataInitialized(): Promise<void> {
         applications,
         talents,
         talentGrades,
+        reqBestClos,
         invitations,
         prodiNames,
         loading: false,
@@ -277,15 +297,27 @@ export const hrDataMutators = {
 };
 
 if (typeof window !== "undefined") {
-  supabase.auth.onAuthStateChange((event) => {
+  supabase.auth.onAuthStateChange((event, session) => {
     if (event === "SIGNED_OUT") {
+      currentUserId = null;
       resetHrDataStore();
-    } else if (event === "SIGNED_IN") {
-      // A fresh session (login OR just-completed registration) must reload data
-      // from scratch — the module-level initPromise may have resolved earlier
-      // against a different/absent session, so reset before re-initializing.
-      resetHrDataStore();
-      ensureHrDataInitialized().catch(() => {});
+      return;
+    }
+
+    // INITIAL_SESSION (page load / refresh) and SIGNED_IN (login or
+    // just-completed registration) both carry a session. Crucially, auth-js
+    // ALSO re-emits SIGNED_IN every time the tab regains visibility
+    // (_recoverAndRefresh on visibilitychange), which previously wiped the
+    // cache and re-showed "Memuat data" on every tab switch. So load only when
+    // the user id is new — redundant re-fires for the same user are ignored.
+    // TOKEN_REFRESHED / USER_UPDATED leave the cached data valid → ignore.
+    if (event === "INITIAL_SESSION" || event === "SIGNED_IN") {
+      const uid = session?.user?.id ?? null;
+      if (uid && uid !== currentUserId) {
+        currentUserId = uid;
+        resetHrDataStore();
+        ensureHrDataInitialized().catch(() => {});
+      }
     }
   });
 }

@@ -47,6 +47,9 @@ let state: StudentDataState = initialState;
 let initPromise: Promise<void> | null = null;
 let channels: RealtimeChannel[] = [];
 const listeners = new Set<() => void>();
+// Auth user the cache currently holds data for. Lets us ignore the redundant
+// SIGNED_IN events auth-js re-emits on tab refocus (see the listener below).
+let currentUserId: string | null = null;
 
 function setState(patch: Partial<StudentDataState>) {
   state = { ...state, ...patch };
@@ -193,6 +196,7 @@ export function ensureStudentDataInitialized(): Promise<void> {
     setState({ loading: true, error: null });
     try {
       const profile = await getCurrentStudentProfile();
+      currentUserId = profile.student.user_id ?? currentUserId;
       const [transcript, jobs, applications, invitations, matchScores] = await Promise.all([
         getStudentTranscript(profile.student.id, profile.student.prodi_id),
         getActiveJobs().catch(() => [] as JobListing[]),
@@ -239,12 +243,40 @@ export const studentDataMutators = {
   setInvitations(updater: (prev: StudentInvitation[]) => StudentInvitation[]) {
     setState({ invitations: updater(state.invitations) });
   },
+  // Reconcile a single job's match score (e.g. the live value computed on the
+  // job-detail page) so the job-matching list badge stays in sync.
+  setMatchScore(jobId: string, score: number) {
+    if (state.matchScores[jobId] === score) return;
+    setState({ matchScores: { ...state.matchScores, [jobId]: score } });
+  },
 };
 
 if (typeof window !== "undefined") {
+<<<<<<< HEAD
   if (!USE_MOCKS) {
     supabase.auth.onAuthStateChange((event) => {
       if (event === "SIGNED_OUT") resetStudentDataStore();
     });
   }
+=======
+  supabase.auth.onAuthStateChange((event, session) => {
+    if (event === "SIGNED_OUT") {
+      currentUserId = null;
+      resetStudentDataStore();
+      return;
+    }
+    // INITIAL_SESSION (page load / refresh) and SIGNED_IN (login) both carry a
+    // session. auth-js also re-emits SIGNED_IN on every tab refocus, so only
+    // (re)load when the user id actually changes — redundant re-fires are
+    // ignored. This also drives the first load (the provider no longer does).
+    if (event === "INITIAL_SESSION" || event === "SIGNED_IN") {
+      const uid = session?.user?.id ?? null;
+      if (uid && uid !== currentUserId) {
+        currentUserId = uid;
+        resetStudentDataStore();
+        ensureStudentDataInitialized().catch(() => {});
+      }
+    }
+  });
+>>>>>>> 757d56e564a62d588636cee52fa92d6e6b6c6ac5
 }
