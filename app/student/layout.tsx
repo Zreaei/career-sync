@@ -29,7 +29,7 @@ function StudentLayoutInner({ children }: { children: React.ReactNode }) {
           Expanded sidebar overlays content instead of pushing it. */}
       <div className="flex-1 flex flex-col transition-all duration-300 md:ml-18">
         <TopBar />
-        <main className="flex-1 p-6 lg:p-10 overflow-y-auto">{children}</main>
+        <main className="flex-1 p-6 lg:p-10 overflow-y-auto bg-gray-200">{children}</main>
       </div>
     </div>
   );

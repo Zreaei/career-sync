@@ -1,5 +1,6 @@
 import type { RealtimeChannel, User } from "@supabase/supabase-js";
 import { supabase } from "./client";
+import { USE_MOCKS } from "./mockConfig";
 import {
   getAdminUsers,
   getProdi,
@@ -37,6 +38,7 @@ const sortByName = <T extends { name: string }>(list: T[]) =>
   [...list].sort((a, b) => a.name.localeCompare(b.name));
 
 function subscribeRealtime() {
+  if (USE_MOCKS) return;
   if (channel) return;
 
   // HMR guard: drop any leftover channel from a previous module instance.
@@ -122,10 +124,16 @@ export function ensureSuperadminDataInitialized(): Promise<void> {
   initPromise = (async () => {
     setState({ loading: true, error: null });
     try {
-      const [admins, prodis, { data: { user } }] = await Promise.all([
+      const [admins, prodis, user] = await Promise.all([
         getAdminUsers(),
         getProdi(),
-        supabase.auth.getUser(),
+        USE_MOCKS
+          ? Promise.resolve({
+              id: "user-superadmin-1",
+              email: "superadmin@univnusantara.ac.id",
+              user_metadata: { full_name: "Superadmin Pusat" },
+            } as unknown as User)
+          : supabase.auth.getUser().then((res) => res.data.user),
       ]);
       setState({ admins, prodis, currentUser: user, loading: false, error: null });
       subscribeRealtime();
@@ -166,7 +174,9 @@ export const superadminDataMutators = {
 };
 
 if (typeof window !== "undefined") {
-  supabase.auth.onAuthStateChange((event) => {
-    if (event === "SIGNED_OUT") resetSuperadminDataStore();
-  });
+  if (!USE_MOCKS) {
+    supabase.auth.onAuthStateChange((event) => {
+      if (event === "SIGNED_OUT") resetSuperadminDataStore();
+    });
+  }
 }

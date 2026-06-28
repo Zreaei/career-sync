@@ -1,4 +1,6 @@
 import { supabase } from "./client";
+import { USE_MOCKS } from "./mockConfig";
+import { mockDb } from "./mockData";
 
 // Talent invitations from the student's point of view. HR creates a row with
 // status "invited" (see hr-queries.inviteTalent); the student then accepts
@@ -29,6 +31,26 @@ const INVITATION_SELECT = `id, hr_id, job_id, status, sent_at, responded_at,
 
 /** All invitations addressed to a student, newest first. */
 export async function getMyInvitations(studentId: string): Promise<StudentInvitation[]> {
+  if (USE_MOCKS) {
+    return mockDb.talent_invitations
+      .filter((inv) => inv.student_id === studentId)
+      .map((inv) => {
+        const job = mockDb.jobs.find((j) => j.id === inv.job_id) ?? null;
+        const company = job ? mockDb.companies.find((c) => c.id === job.company_id) ?? null : null;
+        return {
+          ...inv,
+          sent_at: null,
+          jobs: job
+            ? {
+                title: job.title,
+                location: job.location,
+                job_type: job.job_type,
+                company: company ? { name: company.name, logo_icon: company.logo_icon } : null,
+              }
+            : null,
+        } as StudentInvitation;
+      });
+  }
   const { data, error } = await supabase
     .from("talent_invitations")
     .select(INVITATION_SELECT)
@@ -48,6 +70,19 @@ export async function respondToInvitation(
   id: string,
   accept: boolean,
 ): Promise<StudentInvitation> {
+  if (USE_MOCKS) {
+    const idx = mockDb.talent_invitations.findIndex((inv) => inv.id === id);
+    if (idx === -1) throw new Error("Undangan tidak ditemukan.");
+    mockDb.talent_invitations[idx] = {
+      ...mockDb.talent_invitations[idx],
+      status: accept ? "responded" : "declined",
+      responded_at: new Date().toISOString(),
+    };
+    const invitations = await getMyInvitations(mockDb.talent_invitations[idx].student_id ?? "");
+    const updated = invitations.find((inv) => inv.id === id);
+    if (!updated) throw new Error("Undangan tidak ditemukan.");
+    return updated;
+  }
   const { data, error } = await supabase
     .from("talent_invitations")
     .update({

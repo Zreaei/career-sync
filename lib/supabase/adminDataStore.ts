@@ -1,5 +1,7 @@
 import type { RealtimeChannel } from "@supabase/supabase-js";
 import { supabase } from "./client";
+import { USE_MOCKS } from "./mockConfig";
+import { mockDb } from "./mockData";
 import {
   getAllCLOs,
   getMatkul,
@@ -48,6 +50,19 @@ const sortByKode = (list: Matkul[]) =>
   [...list].sort((a, b) => a.kode.localeCompare(b.kode));
 
 async function resolveAdminCtx(): Promise<AdminProdiInfo> {
+  if (USE_MOCKS) {
+    const admin = mockDb.admin_users[0];
+    if (!admin) throw new Error("Akun admin belum ditautkan ke prodi.");
+    const prodi = mockDb.prodi.find((p) => p.id === admin.prodi_id);
+    if (!prodi) throw new Error("Akun admin ini belum ditautkan ke prodi.");
+    return {
+      prodi_id: prodi.id,
+      prodi_name: prodi.name,
+      admin_name: admin.name,
+      fakultas: prodi.fakultas ?? null,
+      email: admin.email ?? null,
+    };
+  }
   const { data: { session } } = await supabase.auth.getSession();
   if (!session) throw new Error("Tidak ada sesi.");
   const { data, error } = await supabase
@@ -69,6 +84,7 @@ async function resolveAdminCtx(): Promise<AdminProdiInfo> {
 }
 
 function subscribeRealtime(prodiId: string) {
+  if (USE_MOCKS) return;
   if (channels.length > 0) return;
 
   // HMR / repeated init guard: the `supabase` client is a module-level
@@ -214,6 +230,14 @@ function subscribeRealtime(prodiId: string) {
 }
 
 async function fetchStudentClosForMatkul(matkulIds: string[]): Promise<StudentCLO[]> {
+  if (USE_MOCKS) {
+    if (matkulIds.length === 0) return [];
+    const matkulSet = new Set(matkulIds);
+    const cloIds = new Set(
+      mockDb.clos.filter((c) => matkulSet.has(c.matkul_id)).map((c) => c.id),
+    );
+    return mockDb.student_clos.filter((sc) => cloIds.has(sc.clo_id)) as StudentCLO[];
+  }
   if (matkulIds.length === 0) return [];
   // Get CLO ids for our matkul, then student_clos rows for those CLOs.
   const { data: closRows, error: e1 } = await supabase

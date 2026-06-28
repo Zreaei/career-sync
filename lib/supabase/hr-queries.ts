@@ -1,5 +1,7 @@
 import { supabase } from "./client";
 import { encodeRequirements } from "@/lib/encoding";
+import { USE_MOCKS } from "./mockConfig";
+import { mockDb, nextId } from "./mockData";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -90,6 +92,16 @@ export interface TalentInvitation {
 // ─── Current HR profile ───────────────────────────────────────────────────────
 
 export async function getCurrentHrProfile(): Promise<HRProfileWithCompany> {
+  if (USE_MOCKS) {
+    const hrRow = mockDb.hr_profiles[0];
+    if (!hrRow) throw new Error("hr_profile_missing: akun HR belum disiapkan.");
+    const company = mockDb.companies.find((c) => c.id === hrRow.company_id) ?? null;
+    return {
+      ...(hrRow as HRProfile),
+      company,
+      email: "hr@nusantaralabs.example",
+    };
+  }
   const { data: { session } } = await supabase.auth.getSession();
   if (!session) throw new Error("Tidak ada sesi.");
 
@@ -153,6 +165,13 @@ export async function updateHrProfile(
   id: string,
   updates: { name?: string; position?: string | null },
 ): Promise<HRProfile> {
+  if (USE_MOCKS) {
+    const idx = mockDb.hr_profiles.findIndex((h) => h.id === id);
+    if (idx === -1) throw new Error("Profil HR tidak ditemukan.");
+    const next = { ...mockDb.hr_profiles[idx], ...updates } as HRProfile;
+    mockDb.hr_profiles[idx] = next;
+    return next;
+  }
   const { data, error } = await supabase
     .from("hr_profiles")
     .update(updates)
@@ -167,6 +186,13 @@ export async function updateCompany(
   id: string,
   updates: Partial<Omit<Company, "id" | "created_at" | "verified">>,
 ): Promise<Company> {
+  if (USE_MOCKS) {
+    const idx = mockDb.companies.findIndex((c) => c.id === id);
+    if (idx === -1) throw new Error("Perusahaan tidak ditemukan.");
+    const next = { ...mockDb.companies[idx], ...updates } as Company;
+    mockDb.companies[idx] = next;
+    return next;
+  }
   const { data, error } = await supabase
     .from("companies")
     .update(updates)
@@ -185,6 +211,20 @@ interface JobsQueryOpts {
 }
 
 export async function getJobs(opts: JobsQueryOpts | string = {}) {
+  if (USE_MOCKS) {
+    const filter: JobsQueryOpts = typeof opts === "string" ? { hrId: opts } : opts;
+    let list = [...mockDb.jobs];
+    if (filter.hrId) list = list.filter((j) => j.hr_id === filter.hrId);
+    if (filter.companyId) list = list.filter((j) => j.company_id === filter.companyId);
+    list.sort((a, b) => (b.posted_at ?? "").localeCompare(a.posted_at ?? ""));
+    return list.map((j) => ({
+      ...j,
+      job_skills: mockDb.job_skills.filter((s) => s.job_id === j.id),
+      requirements: mockDb.requirements
+        .filter((r) => r.job_id === j.id)
+        .sort((a, b) => a.position - b.position),
+    })) as JobWithSkills[];
+  }
   // Accept legacy string-only arg (hrId) for callers that still pass it.
   const filter: JobsQueryOpts =
     typeof opts === "string" ? { hrId: opts } : opts;
@@ -205,6 +245,20 @@ export async function createJob(
   skills: string[],
   qualifications: string[],
 ) {
+  if (USE_MOCKS) {
+    const created: Job = {
+      ...job,
+      id: nextId("job"),
+      posted_at: new Date().toISOString(),
+      closed_at: null,
+    };
+    mockDb.jobs.push(created);
+    skills.forEach((skill) => mockDb.job_skills.push({ job_id: created.id, skill }));
+    qualifications.forEach((req_text, i) => {
+      mockDb.requirements.push({ id: nextId("req"), job_id: created.id, req_text, position: i });
+    });
+    return created as Job;
+  }
   // Encode requirement embeddings up front: a failure here aborts before any
   // DB write, so we never leave a half-created job with no requirements.
   const reqEmbeddings = await encodeRequirements(qualifications);
@@ -257,6 +311,23 @@ export async function updateJob(
   skills?: string[],
   qualifications?: string[],
 ) {
+  if (USE_MOCKS) {
+    const idx = mockDb.jobs.findIndex((j) => j.id === id);
+    if (idx === -1) throw new Error("Lowongan tidak ditemukan.");
+    const next = { ...mockDb.jobs[idx], ...job } as Job;
+    mockDb.jobs[idx] = next;
+    if (skills !== undefined) {
+      mockDb.job_skills = mockDb.job_skills.filter((s) => s.job_id !== id);
+      skills.forEach((skill) => mockDb.job_skills.push({ job_id: id, skill }));
+    }
+    if (qualifications !== undefined) {
+      mockDb.requirements = mockDb.requirements.filter((r) => r.job_id !== id);
+      qualifications.forEach((req_text, i) => {
+        mockDb.requirements.push({ id: nextId("req"), job_id: id, req_text, position: i });
+      });
+    }
+    return next;
+  }
   // Re-encode replaced requirements before touching the DB, so an encoding
   // failure aborts the whole update rather than wiping requirements first.
   const reqEmbeddings =
@@ -301,6 +372,13 @@ export async function updateJob(
 }
 
 export async function deleteJob(id: string) {
+  if (USE_MOCKS) {
+    mockDb.job_skills = mockDb.job_skills.filter((s) => s.job_id !== id);
+    mockDb.requirements = mockDb.requirements.filter((r) => r.job_id !== id);
+    mockDb.applications = mockDb.applications.filter((a) => a.job_id !== id);
+    mockDb.jobs = mockDb.jobs.filter((j) => j.id !== id);
+    return;
+  }
   await supabase.from("job_skills").delete().eq("job_id", id);
   await supabase.from("requirements").delete().eq("job_id", id);
   const { error } = await supabase.from("jobs").delete().eq("id", id);
@@ -315,6 +393,34 @@ interface ApplicationsQueryOpts {
 }
 
 export async function getApplications(opts: ApplicationsQueryOpts | string = {}) {
+  if (USE_MOCKS) {
+    const filter: ApplicationsQueryOpts = typeof opts === "string" ? { jobId: opts } : opts;
+    let list = [...mockDb.applications];
+    if (filter.jobId) list = list.filter((a) => a.job_id === filter.jobId);
+    if (filter.jobIds && filter.jobIds.length) {
+      const ids = new Set(filter.jobIds);
+      list = list.filter((a) => a.job_id && ids.has(a.job_id));
+    }
+    list.sort((a, b) => (b.applied_at ?? "").localeCompare(a.applied_at ?? ""));
+    return list.map((a) => {
+      const student = mockDb.students.find((s) => s.id === a.student_id) ?? null;
+      const job = mockDb.jobs.find((j) => j.id === a.job_id) ?? null;
+      return {
+        ...a,
+        students: student
+          ? {
+              id: student.id,
+              nim: student.nim,
+              name: student.name,
+              email: student.email,
+              angkatan: student.angkatan,
+              prodi_id: student.prodi_id,
+            }
+          : null,
+        jobs: job ? { id: job.id, title: job.title, company_id: job.company_id } : null,
+      } as ApplicationWithDetails;
+    });
+  }
   const filter: ApplicationsQueryOpts =
     typeof opts === "string" ? { jobId: opts } : opts;
 
@@ -332,6 +438,16 @@ export async function getApplications(opts: ApplicationsQueryOpts | string = {})
 }
 
 export async function updateApplicationStatus(id: string, status: ApplicationStatus) {
+  if (USE_MOCKS) {
+    const idx = mockDb.applications.findIndex((a) => a.id === id);
+    if (idx === -1) throw new Error("Lamaran tidak ditemukan.");
+    mockDb.applications[idx] = {
+      ...mockDb.applications[idx],
+      status,
+      updated_at: new Date().toISOString(),
+    };
+    return;
+  }
   const { error } = await supabase
     .from("applications")
     .update({ status, updated_at: new Date().toISOString() })
@@ -342,6 +458,9 @@ export async function updateApplicationStatus(id: string, status: ApplicationSta
 // ─── Talent invitations ───────────────────────────────────────────────────────
 
 export async function getTalentInvitations(hrId: string): Promise<TalentInvitation[]> {
+  if (USE_MOCKS) {
+    return mockDb.talent_invitations.filter((i) => i.hr_id === hrId) as TalentInvitation[];
+  }
   const { data, error } = await supabase
     .from("talent_invitations")
     .select("id, hr_id, student_id, job_id, status, responded_at")
@@ -351,6 +470,18 @@ export async function getTalentInvitations(hrId: string): Promise<TalentInvitati
 }
 
 export async function inviteTalent(hrId: string, studentId: string, jobId: string) {
+  if (USE_MOCKS) {
+    const created = {
+      id: nextId("inv"),
+      hr_id: hrId,
+      student_id: studentId,
+      job_id: jobId,
+      status: "invited",
+      responded_at: null,
+    } as TalentInvitation;
+    mockDb.talent_invitations.push(created);
+    return created;
+  }
   const { data, error } = await supabase
     .from("talent_invitations")
     .insert({ hr_id: hrId, student_id: studentId, job_id: jobId, status: "invited" })
@@ -361,6 +492,10 @@ export async function inviteTalent(hrId: string, studentId: string, jobId: strin
 }
 
 export async function cancelInvitation(id: string) {
+  if (USE_MOCKS) {
+    mockDb.talent_invitations = mockDb.talent_invitations.filter((i) => i.id !== id);
+    return;
+  }
   const { error } = await supabase
     .from("talent_invitations")
     .delete()
@@ -392,6 +527,11 @@ export interface TalentCLOGrade {
 }
 
 export async function getTalentStudents(): Promise<TalentStudent[]> {
+  if (USE_MOCKS) {
+    return mockDb.students
+      .filter((s) => s.status === "active")
+      .sort((a, b) => a.name.localeCompare(b.name)) as TalentStudent[];
+  }
   const { data, error } = await supabase
     .from("students")
     .select("id, nim, name, email, angkatan, prodi_id, status")
@@ -402,6 +542,21 @@ export async function getTalentStudents(): Promise<TalentStudent[]> {
 }
 
 export async function getTalentGrades(studentIds: string[]): Promise<TalentCLOGrade[]> {
+  if (USE_MOCKS) {
+    if (studentIds.length === 0) return [];
+    const ids = new Set(studentIds);
+    return mockDb.student_clos
+      .filter((sc) => ids.has(sc.student_id))
+      .map((sc) => {
+        const clo = mockDb.clos.find((c) => c.id === sc.clo_id) ?? null;
+        return {
+          ...sc,
+          clos: clo
+            ? { clo_code: clo.clo_code, clo_text: clo.clo_text, matkul_id: clo.matkul_id }
+            : null,
+        } as TalentCLOGrade;
+      });
+  }
   if (studentIds.length === 0) return [];
   const { data, error } = await supabase
     .from("student_clos")
@@ -412,6 +567,9 @@ export async function getTalentGrades(studentIds: string[]): Promise<TalentCLOGr
 }
 
 export async function getProdiNames(): Promise<Record<string, string>> {
+  if (USE_MOCKS) {
+    return Object.fromEntries(mockDb.prodi.map((p) => [p.id, p.name]));
+  }
   const { data, error } = await supabase
     .from("prodi")
     .select("id, name");

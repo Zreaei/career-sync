@@ -1,4 +1,5 @@
 import { supabase } from "./client";
+import { USE_MOCKS } from "./mockConfig";
 import { ensureAdminDataInitialized } from "./adminDataStore";
 import { ensureHrDataInitialized } from "./hrDataStore";
 import { ensureStudentDataInitialized } from "./studentDataStore";
@@ -20,6 +21,21 @@ export const roleLabel: Record<UserRole, string> = {
   student: "Mahasiswa",
 };
 
+let mockUser = {
+  id: "mock-user-1",
+  email: "mock@careersync.local",
+  user_metadata: { full_name: "Mock User" },
+};
+let mockRole: UserRole = "admin";
+
+function resolveMockRole(email: string): UserRole {
+  const e = email.toLowerCase();
+  if (e.includes("super")) return "superadmin";
+  if (e.includes("hr")) return "hr";
+  if (e.includes("admin")) return "admin";
+  return "student";
+}
+
 function friendlyAuthError(message: string): string {
   const m = message.toLowerCase();
   if (m.includes("invalid login credentials")) return "Email atau kata sandi salah.";
@@ -31,27 +47,35 @@ function friendlyAuthError(message: string): string {
 }
 
 export async function signIn(email: string, password: string) {
+  if (USE_MOCKS) {
+    mockUser = { ...mockUser, email, user_metadata: { full_name: email.split("@")[0] ?? "Mock User" } };
+    return { session: { user: mockUser } };
+  }
   const { data, error } = await supabase.auth.signInWithPassword({ email, password });
   if (error) throw new Error(friendlyAuthError(error.message));
   return data;
 }
 
 export async function signOut() {
+  if (USE_MOCKS) return;
   const { error } = await supabase.auth.signOut();
   if (error) throw new Error(friendlyAuthError(error.message));
 }
 
 export async function getSession() {
+  if (USE_MOCKS) return { user: mockUser } as never;
   const { data: { session } } = await supabase.auth.getSession();
   return session;
 }
 
 export async function getCurrentUser() {
+  if (USE_MOCKS) return mockUser as never;
   const { data: { user } } = await supabase.auth.getUser();
   return user;
 }
 
 export async function getCurrentUserRole(): Promise<UserRole | null> {
+  if (USE_MOCKS) return mockRole;
   const user = await getCurrentUser();
   if (!user) return null;
   const { data, error } = await supabase
@@ -73,6 +97,12 @@ export async function signInAndResolveRole(
   password: string,
   expectedRole?: UserRole,
 ): Promise<{ role: UserRole; redirectTo: string }> {
+  if (USE_MOCKS) {
+    const role = expectedRole ?? resolveMockRole(email);
+    mockRole = role;
+    mockUser = { ...mockUser, email, user_metadata: { full_name: email.split("@")[0] ?? "Mock User" } };
+    return { role, redirectTo: roleDashboard[role] };
+  }
   await signIn(email, password);
   const role = await getCurrentUserRole();
   if (!role) {

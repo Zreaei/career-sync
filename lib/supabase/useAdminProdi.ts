@@ -2,6 +2,8 @@
 
 import { useEffect, useState } from "react";
 import { supabase } from "./client";
+import { USE_MOCKS } from "./mockConfig";
+import { mockDb } from "./mockData";
 
 export interface AdminProdiInfo {
   prodi_id: string;
@@ -17,16 +19,42 @@ interface State {
   error: string | null;
 }
 
+function getMockState(): State {
+  const admin = mockDb.admin_users[0] ?? null;
+  const prodi = admin
+    ? mockDb.prodi.find((p) => p.id === admin.prodi_id) ?? null
+    : null;
+  return {
+    data: admin && prodi
+      ? {
+          prodi_id: prodi.id,
+          prodi_name: prodi.name,
+          admin_name: admin.name,
+          fakultas: prodi.fakultas ?? null,
+          email: admin.email ?? null,
+        }
+      : null,
+    loading: false,
+    error: admin && !prodi ? "Akun admin ini belum ditautkan ke prodi." : null,
+  };
+}
+
 /**
  * Resolves the current admin's prodi context (the prodi they manage). Used by
  * admin pages to scope queries and prefill `prodi_id` on insert. Returns null
  * if the user has no admin row.
  */
 export function useAdminProdi(): State {
-  const [state, setState] = useState<State>({ data: null, loading: true, error: null });
+  const [state, setState] = useState<State>(
+    USE_MOCKS ? getMockState : { data: null, loading: true, error: null },
+  );
 
   useEffect(() => {
     let cancelled = false;
+
+    if (USE_MOCKS) {
+      return () => { cancelled = true; };
+    }
 
     (async () => {
       const { data: { session } } = await supabase.auth.getSession();

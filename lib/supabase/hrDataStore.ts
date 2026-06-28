@@ -1,5 +1,6 @@
 import type { RealtimeChannel } from "@supabase/supabase-js";
 import { supabase } from "./client";
+import { USE_MOCKS } from "./mockConfig";
 import {
   getApplications,
   getCurrentHrProfile,
@@ -55,6 +56,7 @@ function setState(patch: Partial<HRDataState>) {
 }
 
 function subscribeRealtime(hrId: string, companyId: string | null) {
+  if (USE_MOCKS) return;
   if (channels.length > 0) return;
 
   // HMR / repeated-init guard.

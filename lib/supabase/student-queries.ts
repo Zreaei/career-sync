@@ -1,4 +1,6 @@
 import { supabase } from "./client";
+import { USE_MOCKS } from "./mockConfig";
+import { mockDb, nextId } from "./mockData";
 import type { CLO, Matkul, Student, StudentCLO } from "./admin-queries";
 
 export interface StudentProfile {
@@ -16,6 +18,12 @@ export interface CourseRecord {
  * user is authenticated but no `students` row is linked to their auth id.
  */
 export async function getCurrentStudentProfile(): Promise<StudentProfile> {
+  if (USE_MOCKS) {
+    const student = mockDb.students[0];
+    if (!student) throw new Error("Akun Anda belum ditautkan ke data mahasiswa.");
+    const prodi = mockDb.prodi.find((p) => p.id === student.prodi_id) ?? null;
+    return { student, prodi: prodi ? { id: prodi.id, name: prodi.name, fakultas: prodi.fakultas } : null };
+  }
   const { data: { session } } = await supabase.auth.getSession();
   if (!session) throw new Error("Tidak ada sesi.");
 
@@ -44,6 +52,31 @@ export async function getStudentTranscript(
   studentId: string,
   prodiId: string | null,
 ): Promise<CourseRecord[]> {
+  if (USE_MOCKS) {
+    const matkul = mockDb.matkul
+      .filter((m) => (prodiId ? m.prodi_id === prodiId : true))
+      .sort((a, b) => (a.semester ?? 0) - (b.semester ?? 0) || a.kode.localeCompare(b.kode));
+    if (matkul.length === 0) return [];
+    const matkulIds = matkul.map((m) => m.id);
+    const clos = mockDb.clos
+      .filter((c) => matkulIds.includes(c.matkul_id))
+      .sort((a, b) => (a.clo_code ?? "").localeCompare(b.clo_code ?? ""));
+    const cloIds = clos.map((c) => c.id);
+    const studentClos = mockDb.student_clos.filter(
+      (sc) => sc.student_id === studentId && cloIds.includes(sc.clo_id),
+    );
+    const gradeByClo = new Map(studentClos.map((sc) => [sc.clo_id, sc.grade]));
+    const closByMatkul = new Map<string, (CLO & { grade: number | null })[]>();
+    clos.forEach((c) => {
+      const list = closByMatkul.get(c.matkul_id) ?? [];
+      list.push({ ...c, grade: gradeByClo.get(c.id) ?? null });
+      closByMatkul.set(c.matkul_id, list);
+    });
+    return matkul.map((mk) => ({
+      matkul: mk,
+      clos: closByMatkul.get(mk.id) ?? [],
+    }));
+  }
   // 1. matkul scoped to student's prodi
   let mq = supabase.from("matkul").select("*").order("semester").order("kode");
   if (prodiId) mq = mq.eq("prodi_id", prodiId);
@@ -107,6 +140,23 @@ export interface JobListing {
 }
 
 export async function getActiveJobs(): Promise<JobListing[]> {
+  if (USE_MOCKS) {
+    return mockDb.jobs
+      .filter((j) => j.status === "active")
+      .sort((a, b) => (b.posted_at ?? "").localeCompare(a.posted_at ?? ""))
+      .map((j) => ({
+        id: j.id,
+        title: j.title,
+        location: j.location,
+        job_type: j.job_type,
+        category: j.category,
+        salary: j.salary,
+        description: j.description,
+        posted_at: j.posted_at,
+        deadline: j.deadline,
+        job_skills: mockDb.job_skills.filter((s) => s.job_id === j.id),
+      })) as JobListing[];
+  }
   const pageSize = 1000;
   const all: JobListing[] = [];
   for (let page = 0; ; page++) {
@@ -141,6 +191,18 @@ export async function getActiveJobs(): Promise<JobListing[]> {
 export async function getJobMatchScores(
   studentId: string,
 ): Promise<Record<string, number>> {
+  if (USE_MOCKS) {
+    const grades = mockDb.student_clos
+      .filter((sc): sc is StudentCLO & { grade: number } => sc.student_id === studentId && typeof sc.grade === "number")
+      .map((sc) => sc.grade);
+    if (grades.length === 0) return {};
+    const base = Math.round(grades.reduce((sum, grade) => sum + grade, 0) / grades.length);
+    return Object.fromEntries(
+      mockDb.jobs
+        .filter((job) => job.status === "active")
+        .map((job, index) => [job.id, Math.max(0, Math.min(100, base - index * 6))]),
+    );
+  }
   const pageSize = 1000;
   const out: Record<string, number> = {};
   for (let page = 0; ; page++) {
@@ -175,6 +237,30 @@ export async function getJobMatchBreakdown(
   studentId: string,
   jobId: string,
 ): Promise<ReqMatchBreakdown[]> {
+  if (USE_MOCKS) {
+    const requirements = mockDb.requirements
+      .filter((req) => req.job_id === jobId)
+      .sort((a, b) => a.position - b.position);
+    return requirements.map((req, index) => {
+      const studentClo = mockDb.student_clos.find((sc) => sc.student_id === studentId) ?? null;
+      const clo = studentClo ? mockDb.clos.find((c) => c.id === studentClo.clo_id) ?? null : null;
+      const matkul = clo ? mockDb.matkul.find((m) => m.id === clo.matkul_id) ?? null : null;
+      const similarity = Math.max(0.55, 0.86 - index * 0.08);
+      const grade = studentClo?.grade ?? null;
+      return {
+        requirement_id: req.id,
+        req_text: req.req_text,
+        req_position: req.position,
+        similarity,
+        best_clo_id: clo?.id ?? null,
+        clo_code: clo?.clo_code ?? null,
+        clo_text: clo?.clo_text ?? null,
+        matkul_nama: matkul?.nama ?? null,
+        grade,
+        contribution: Math.round(similarity * (grade ?? 0)),
+      };
+    });
+  }
   const { data, error } = await supabase.rpc("student_job_match_breakdown", {
     p_student_id: studentId,
     p_job_id: jobId,
@@ -195,6 +281,22 @@ export interface StudentApplication {
 }
 
 export async function getMyApplications(studentId: string): Promise<StudentApplication[]> {
+  if (USE_MOCKS) {
+    return mockDb.applications
+      .filter((a) => a.student_id === studentId)
+      .sort((a, b) => (b.applied_at ?? "").localeCompare(a.applied_at ?? ""))
+      .map((a) => {
+        const job = mockDb.jobs.find((j) => j.id === a.job_id) ?? null;
+        return {
+          id: a.id,
+          job_id: a.job_id,
+          match_score: a.match_score != null ? Math.round(a.match_score * 100) : null,
+          status: a.status,
+          applied_at: a.applied_at,
+          jobs: job ? { title: job.title, company_id: job.company_id } : null,
+        } as StudentApplication;
+      });
+  }
   const { data, error } = await supabase
     .from("applications")
     .select(`id, job_id, match_score, status, applied_at, jobs ( title, company_id )`)
@@ -218,6 +320,30 @@ export async function applyToJob(
   jobId: string,
   matchScore: number | null,
 ): Promise<StudentApplication> {
+  if (USE_MOCKS) {
+    if (mockDb.applications.some((a) => a.student_id === studentId && a.job_id === jobId)) {
+      throw new Error("Anda sudah melamar lowongan ini.");
+    }
+    const job = mockDb.jobs.find((j) => j.id === jobId) ?? null;
+    const created = {
+      id: nextId("app"),
+      student_id: studentId,
+      job_id: jobId,
+      match_score: matchScore != null ? matchScore / 100 : null,
+      status: "new" as const,
+      applied_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+    };
+    mockDb.applications.push(created);
+    return {
+      id: created.id,
+      job_id: created.job_id,
+      match_score: matchScore,
+      status: created.status,
+      applied_at: created.applied_at,
+      jobs: job ? { title: job.title, company_id: job.company_id } : null,
+    };
+  }
   const { data, error } = await supabase
     .from("applications")
     .insert({
@@ -263,6 +389,31 @@ export interface JobDetail {
 }
 
 export async function getJobById(jobId: string): Promise<JobDetail | null> {
+  if (USE_MOCKS) {
+    const job = mockDb.jobs.find((j) => j.id === jobId);
+    if (!job) return null;
+    const company = mockDb.companies.find((c) => c.id === job.company_id) ?? null;
+    const detail: JobDetail = {
+      id: job.id,
+      title: job.title,
+      location: job.location,
+      job_type: job.job_type,
+      category: job.category,
+      salary: job.salary,
+      description: job.description,
+      posted_at: job.posted_at,
+      deadline: job.deadline,
+      status: job.status,
+      company: company
+        ? { id: company.id, name: company.name, location: company.location, industry: company.industry, logo_icon: company.logo_icon }
+        : null,
+      job_skills: mockDb.job_skills.filter((s) => s.job_id === job.id),
+      requirements: mockDb.requirements
+        .filter((r) => r.job_id === job.id)
+        .sort((a, b) => a.position - b.position),
+    };
+    return detail;
+  }
   const { data, error } = await supabase
     .from("jobs")
     .select(

@@ -1,4 +1,5 @@
 import { supabase } from "./client";
+import { USE_MOCKS } from "./mockConfig";
 
 export interface RegisterHrInput {
   email: string;
@@ -14,6 +15,7 @@ export interface RegisterHrInput {
 }
 
 export async function registerHr(input: RegisterHrInput): Promise<void> {
+  if (USE_MOCKS) return;
   const { data, error } = await supabase.functions.invoke("register-hr", {
     body: input,
   });

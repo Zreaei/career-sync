@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { supabase } from "./client";
 import { roleDashboard, type UserRole } from "./auth";
+import { USE_MOCKS } from "./mockConfig";
 
 interface RequireRoleState {
   status: "checking" | "ok" | "redirecting";
@@ -20,12 +21,16 @@ interface RequireRoleState {
 export function useRequireRole(expected: UserRole): RequireRoleState {
   const router = useRouter();
   const [state, setState] = useState<RequireRoleState>({
-    status: "checking",
+    status: USE_MOCKS ? "ok" : "checking",
     error: null,
   });
 
   useEffect(() => {
     let cancelled = false;
+
+    if (USE_MOCKS) {
+      return () => { cancelled = true; };
+    }
 
     const redirectToLogin = (reason: string) => {
       if (cancelled) return;

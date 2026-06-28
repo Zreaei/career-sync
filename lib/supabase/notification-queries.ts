@@ -1,4 +1,5 @@
 import { supabase } from "./client";
+import { USE_MOCKS } from "./mockConfig";
 
 // In-app notifications. Rows are created server-side by the triggers installed
 // in migration 20260612_notifications.sql (application status changes, new
@@ -16,6 +17,7 @@ export interface NotificationRow {
 
 /** Most-recent notifications for the logged-in user. */
 export async function getMyNotifications(limit = 50): Promise<NotificationRow[]> {
+  if (USE_MOCKS) return [];
   const { data, error } = await supabase
     .from("notifications")
     .select("*")
@@ -26,6 +28,7 @@ export async function getMyNotifications(limit = 50): Promise<NotificationRow[]>
 }
 
 export async function markNotificationRead(id: string): Promise<void> {
+  if (USE_MOCKS) return;
   const { error } = await supabase
     .from("notifications")
     .update({ read_at: new Date().toISOString() })
@@ -35,6 +38,7 @@ export async function markNotificationRead(id: string): Promise<void> {
 }
 
 export async function markAllNotificationsRead(userId: string): Promise<void> {
+  if (USE_MOCKS) return;
   const { error } = await supabase
     .from("notifications")
     .update({ read_at: new Date().toISOString() })

@@ -1,5 +1,6 @@
 import type { RealtimeChannel } from "@supabase/supabase-js";
 import { supabase } from "./client";
+import { USE_MOCKS } from "./mockConfig";
 import {
   getActiveJobs,
   getCurrentStudentProfile,
@@ -119,6 +120,7 @@ function scheduleInvitationsRefresh() {
 }
 
 function subscribeRealtime(studentId: string) {
+  if (USE_MOCKS) return;
   if (channels.length > 0) return;
 
   // HMR guard.
@@ -240,7 +242,9 @@ export const studentDataMutators = {
 };
 
 if (typeof window !== "undefined") {
-  supabase.auth.onAuthStateChange((event) => {
-    if (event === "SIGNED_OUT") resetStudentDataStore();
-  });
+  if (!USE_MOCKS) {
+    supabase.auth.onAuthStateChange((event) => {
+      if (event === "SIGNED_OUT") resetStudentDataStore();
+    });
+  }
 }
