@@ -252,13 +252,6 @@ export const studentDataMutators = {
 };
 
 if (typeof window !== "undefined") {
-<<<<<<< HEAD
-  if (!USE_MOCKS) {
-    supabase.auth.onAuthStateChange((event) => {
-      if (event === "SIGNED_OUT") resetStudentDataStore();
-    });
-  }
-=======
   supabase.auth.onAuthStateChange((event, session) => {
     if (event === "SIGNED_OUT") {
       currentUserId = null;
@@ -278,5 +271,4 @@ if (typeof window !== "undefined") {
       }
     }
   });
->>>>>>> 757d56e564a62d588636cee52fa92d6e6b6c6ac5
 }
